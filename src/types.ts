@@ -4,6 +4,8 @@ export type RequestMode = 'worker' | 'direct'
 
 export type Ratio = '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9'
 
+export type AspectRatio = 'auto' | Ratio
+
 export interface AppSettings {
   requestMode: RequestMode
   baseUrl: string
@@ -13,7 +15,7 @@ export interface AppSettings {
   timeoutSec: number
   count: number
   concurrency: number
-  defaultRatio: Ratio
+  defaultRatio: AspectRatio
   rememberSecrets: boolean
 }
 
@@ -28,14 +30,14 @@ export interface InputImage {
 export interface GenerateRequest {
   mode: Mode
   prompt: string
-  ratio: Ratio
+  ratio: AspectRatio
   model: string
   baseUrl: string
   apiKey: string
   timeoutSec: number
   count: number
   concurrency: number
-  inputImage?: InputImage | null
+  inputImages?: InputImage[]
 }
 
 export interface GenerateResultItem {
@@ -51,7 +53,7 @@ export interface GenerateResultItem {
 export interface GenerateSuccessResponse {
   ok: true
   mode: Mode
-  ratio: Ratio
+  ratio: AspectRatio
   size: string
   model: string
   elapsedMs: number
@@ -66,7 +68,7 @@ export interface GenerateErrorResponse {
 }
 
 export type StreamEvent =
-  | { event: 'start'; data: { mode: Mode; ratio: Ratio; size: string; model: string; count: number } }
+  | { event: 'start'; data: { mode: Mode; ratio: AspectRatio; size: string; model: string; count: number } }
   | { event: 'ping'; data: { time: number } }
   | { event: 'result'; data: GenerateResultItem }
   | { event: 'done'; data: { ok: true; elapsedMs: number } }
@@ -77,10 +79,29 @@ export interface HistoryItem {
   createdAt: number
   mode: Mode
   prompt: string
-  ratio: Ratio
+  ratio: AspectRatio
   size: string
   model: string
   images: string[]
   failedCount: number
   elapsedMs: number
+}
+
+export type GenerationTaskStatus = 'running' | 'completed' | 'failed'
+
+export interface GenerationTask {
+  id: string
+  createdAt: number
+  mode: Mode
+  requestMode: RequestMode
+  prompt: string
+  ratio: AspectRatio
+  size: string
+  model: string
+  count: number
+  concurrency: number
+  status: GenerationTaskStatus
+  results: GenerateResultItem[]
+  elapsedMs?: number
+  error?: string
 }

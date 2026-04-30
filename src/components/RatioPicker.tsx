@@ -1,9 +1,9 @@
-﻿import type { Ratio } from '../types'
+﻿import type { AspectRatio } from '../types'
 import { RATIOS, getRatioPreviewStyle } from '../lib/ratios'
 
 interface Props {
-  value: Ratio
-  onChange: (ratio: Ratio) => void
+  value: AspectRatio
+  onChange: (ratio: AspectRatio) => void
 }
 
 export function RatioPicker({ value, onChange }: Props) {
@@ -19,7 +19,7 @@ export function RatioPicker({ value, onChange }: Props) {
           role="radio"
         >
           <span className="ratio-icon" style={getRatioPreviewStyle(ratio)} />
-          <span>{ratio}</span>
+          <span>{ratio === 'auto' ? '自动' : ratio}</span>
         </button>
       ))}
     </div>

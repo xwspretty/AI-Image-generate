@@ -1,4 +1,4 @@
-﻿import type { AppSettings, Ratio } from '../types'
+import type { AppSettings, AspectRatio } from '../types'
 
 const SETTINGS_KEY = 'ai-image-generate:settings:v1'
 const SESSION_SETTINGS_KEY = 'ai-image-generate:session-settings:v1'
@@ -12,12 +12,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   timeoutSec: 420,
   count: 1,
   concurrency: 2,
-  defaultRatio: '1:1',
+  defaultRatio: 'auto',
   rememberSecrets: true,
 }
 
-function normalizeRatio(value: unknown): Ratio {
-  return value === '1:1' || value === '2:3' || value === '3:2' || value === '3:4' || value === '4:3' || value === '9:16' || value === '16:9'
+function normalizeRatio(value: unknown): AspectRatio {
+  return value === 'auto' || value === '1:1' || value === '2:3' || value === '3:2' || value === '3:4' || value === '4:3' || value === '9:16' || value === '16:9'
     ? value
     : DEFAULT_SETTINGS.defaultRatio
 }

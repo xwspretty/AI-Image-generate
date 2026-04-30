@@ -1,4 +1,4 @@
-﻿import type { Ratio } from '../src/types'
+import type { AspectRatio, Ratio } from '../src/types'
 
 interface Env {
   ASSETS: Fetcher
@@ -19,20 +19,21 @@ interface InputImagePayload {
 interface GeneratePayload {
   mode?: Mode
   prompt?: string
-  ratio?: Ratio
+  ratio?: AspectRatio
   model?: string
   baseUrl?: string
   apiKey?: string
   timeoutSec?: number
   count?: number
   concurrency?: number
+  inputImages?: InputImagePayload[]
   inputImage?: InputImagePayload | null
 }
 
 interface NormalizedPayload {
   mode: Mode
   prompt: string
-  ratio: Ratio
+  ratio: AspectRatio
   size: string
   model: string
   baseUrl: string
@@ -40,7 +41,7 @@ interface NormalizedPayload {
   timeoutSec: number
   count: number
   concurrency: number
-  inputImage: InputImagePayload | null
+  inputImages: InputImagePayload[]
 }
 
 interface ResultItem {
@@ -61,6 +62,14 @@ const RATIO_SIZE: Record<Ratio, string> = {
   '4:3': '1024x768',
   '9:16': '1008x1792',
   '16:9': '1792x1008',
+}
+
+function isFixedRatio(ratio: AspectRatio): ratio is Ratio {
+  return ratio !== 'auto'
+}
+
+function getRatioSize(ratio: AspectRatio) {
+  return isFixedRatio(ratio) ? RATIO_SIZE[ratio] : '自动'
 }
 
 const CORS_HEADERS = {
@@ -201,22 +210,30 @@ function requireAccessPassword(request: Request, env: Env): Response | null {
 function normalizePayload(payload: GeneratePayload, env: Env): NormalizedPayload {
   const mode = payload.mode === 'image-to-image' ? 'image-to-image' : 'text-to-image'
   const prompt = String(payload.prompt || '').trim()
-  const ratio = isRatio(payload.ratio) ? payload.ratio : '1:1'
-  const size = RATIO_SIZE[ratio]
+  const ratio = isRatio(payload.ratio) ? payload.ratio : 'auto'
+  const size = getRatioSize(ratio)
   const model = String(payload.model || '').trim()
   const baseUrl = normalizeBaseUrl(String(payload.baseUrl || '').trim(), env)
   const apiKey = String(payload.apiKey || '').trim()
   const timeoutSec = clamp(Number(payload.timeoutSec), 10, 900, 420)
   const count = clamp(Number(payload.count), 1, 12, 1)
   const concurrency = clamp(Number(payload.concurrency), 1, 6, 2)
-  const inputImage = payload.inputImage || null
+  const inputImages = normalizeInputImages(payload)
 
   if (!prompt) throw new Error('提示词不能为空')
   if (!model) throw new Error('模型不能为空')
   if (!apiKey) throw new Error('API Key 不能为空')
-  if (mode === 'image-to-image' && !inputImage?.dataUrl) throw new Error('图生图模式缺少参考图')
+  if (mode === 'image-to-image' && inputImages.length === 0) throw new Error('图生图模式缺少参考图')
 
-  return { mode, prompt, ratio, size, model, baseUrl, apiKey, timeoutSec, count, concurrency, inputImage }
+  return { mode, prompt, ratio, size, model, baseUrl, apiKey, timeoutSec, count, concurrency, inputImages }
+}
+
+function normalizeInputImages(payload: GeneratePayload) {
+  const fromArray = Array.isArray(payload.inputImages) ? payload.inputImages : []
+  const legacy = payload.inputImage ? [payload.inputImage] : []
+  return [...fromArray, ...legacy]
+    .filter((image): image is InputImagePayload => Boolean(image?.dataUrl))
+    .slice(0, 8)
 }
 
 function normalizeBaseUrl(value: string, env: Env) {
@@ -253,7 +270,7 @@ function normalizeBaseUrl(value: string, env: Env) {
 }
 
 function isRatio(value: unknown): value is Ratio {
-  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(RATIO_SIZE, value)
+  return value === 'auto' || (typeof value === 'string' && Object.prototype.hasOwnProperty.call(RATIO_SIZE, value))
 }
 
 function clamp(value: number, min: number, max: number, fallback: number) {
@@ -354,13 +371,13 @@ function buildUpstreamUrl(baseUrl: string, path: string) {
 }
 
 async function callTextImage(payload: NormalizedPayload, signal: AbortSignal) {
-  const body = {
+  const body: { model: string; prompt: string; n: number; response_format: string; size?: string } = {
     model: payload.model,
     prompt: payload.prompt,
-    size: payload.size,
     n: 1,
     response_format: 'b64_json',
   }
+  if (isFixedRatio(payload.ratio)) body.size = payload.size
 
   return fetch(buildUpstreamUrl(payload.baseUrl, 'images/generations'), {
     method: 'POST',
@@ -375,16 +392,19 @@ async function callTextImage(payload: NormalizedPayload, signal: AbortSignal) {
 }
 
 async function callImageEdit(payload: NormalizedPayload, signal: AbortSignal) {
-  if (!payload.inputImage?.dataUrl) throw new Error('缺少参考图')
+  if (!payload.inputImages.length) throw new Error('缺少参考图')
 
-  const { blob, mime } = dataUrlToBlob(payload.inputImage.dataUrl)
   const form = new FormData()
   form.append('model', payload.model)
   form.append('prompt', payload.prompt)
-  form.append('size', payload.size)
+  if (isFixedRatio(payload.ratio)) form.append('size', payload.size)
   form.append('n', '1')
   form.append('response_format', 'b64_json')
-  form.append('image', blob, payload.inputImage.name || `input.${mime.split('/')[1] || 'png'}`)
+  for (let index = 0; index < payload.inputImages.length; index += 1) {
+    const inputImage = payload.inputImages[index]
+    const { blob, mime } = dataUrlToBlob(inputImage.dataUrl || '')
+    form.append('image[]', blob, inputImage.name || `input-${index + 1}.${mime.split('/')[1] || 'png'}`)
+  }
 
   return fetch(buildUpstreamUrl(payload.baseUrl, 'images/edits'), {
     method: 'POST',

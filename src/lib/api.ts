@@ -1,4 +1,5 @@
-﻿import type {
+import type {
+  AspectRatio,
   GenerateErrorResponse,
   GenerateRequest,
   GenerateResultItem,
@@ -6,7 +7,7 @@
   InputImage,
   StreamEvent,
 } from '../types'
-import { RATIO_SIZE } from './ratios'
+import { getRatioSize, isFixedRatio, RATIO_SIZE } from './ratios'
 
 export function createId(prefix = 'id') {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
@@ -58,7 +59,7 @@ export async function generateImagesStream(
   let meta = {
     mode: payload.mode,
     ratio: payload.ratio,
-    size: RATIO_SIZE[payload.ratio],
+    size: getRatioSize(payload.ratio),
     model: payload.model,
   }
   let elapsedMs = 0
@@ -146,7 +147,7 @@ export async function generateImagesDirect(
     ok: true,
     mode: normalizedPayload.mode,
     ratio: normalizedPayload.ratio,
-    size: RATIO_SIZE[normalizedPayload.ratio],
+    size: getRatioSize(normalizedPayload.ratio),
     model: normalizedPayload.model,
     elapsedMs: Date.now() - startedAt,
     results,
@@ -225,13 +226,13 @@ async function generateOneDirect(payload: GenerateRequest, index: number): Promi
 }
 
 async function callTextImageDirect(payload: GenerateRequest, signal: AbortSignal) {
-  const body = {
+  const body: { model: string; prompt: string; n: number; response_format: string; size?: string } = {
     model: payload.model,
     prompt: payload.prompt,
-    size: RATIO_SIZE[payload.ratio],
     n: 1,
     response_format: 'b64_json',
   }
+  if (isFixedRatio(payload.ratio)) body.size = RATIO_SIZE[payload.ratio]
 
   return fetch(buildUpstreamUrl(payload.baseUrl, 'images/generations'), {
     method: 'POST',
@@ -246,16 +247,21 @@ async function callTextImageDirect(payload: GenerateRequest, signal: AbortSignal
 }
 
 async function callImageEditDirect(payload: GenerateRequest, signal: AbortSignal) {
-  if (!payload.inputImage?.dataUrl) throw new Error('缺少参考图')
+  const inputImages = payload.inputImages || []
+  if (!inputImages.length) throw new Error('缺少参考图')
 
-  const { blob, mime } = dataUrlToBlob(payload.inputImage.dataUrl)
   const form = new FormData()
   form.append('model', payload.model)
   form.append('prompt', payload.prompt)
-  form.append('size', RATIO_SIZE[payload.ratio])
+  if (isFixedRatio(payload.ratio)) form.append('size', RATIO_SIZE[payload.ratio])
   form.append('n', '1')
   form.append('response_format', 'b64_json')
-  form.append('image', blob, payload.inputImage.name || `input.${mime.split('/')[1] || 'png'}`)
+
+  for (let index = 0; index < inputImages.length; index += 1) {
+    const inputImage = inputImages[index]
+    const { blob, mime } = dataUrlToBlob(inputImage.dataUrl)
+    form.append('image[]', blob, inputImage.name || `input-${index + 1}.${mime.split('/')[1] || 'png'}`)
+  }
 
   return fetch(buildUpstreamUrl(payload.baseUrl, 'images/edits'), {
     method: 'POST',

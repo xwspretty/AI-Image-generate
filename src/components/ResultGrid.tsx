@@ -1,4 +1,5 @@
-﻿import type { GenerateResultItem } from '../types'
+import { useState } from 'react'
+import type { GenerateResultItem } from '../types'
 import { copyImageToClipboard, downloadDataUrl } from '../lib/api'
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
 type ResultCard = { index: number; loading: true } | (GenerateResultItem & { loading: false })
 
 export function ResultGrid({ loading, placeholders, results, onUseAsReference, onMessage }: Props) {
+  const [preview, setPreview] = useState<{ src: string; title: string } | null>(null)
   const empty = !loading && results.length === 0
   if (empty) {
     return (
@@ -70,6 +72,14 @@ export function ResultGrid({ loading, placeholders, results, onUseAsReference, o
           )}
         </article>
       ))}
+      {preview ? (
+        <div className="preview-mask" onMouseDown={(e) => e.target === e.currentTarget && setPreview(null)}>
+          <div className="preview-dialog" role="dialog" aria-modal="true" aria-label={preview.title}>
+            <button type="button" className="preview-close" onClick={() => setPreview(null)} aria-label="????">?</button>
+            <img src={preview.src} alt={preview.title} />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

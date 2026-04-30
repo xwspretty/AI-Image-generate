@@ -1,13 +1,13 @@
 ﻿import { useEffect, useState } from 'react'
-import type { AppSettings, GenerateResultItem, HistoryItem, InputImage, Mode, Ratio } from './types'
+import type { AppSettings, AspectRatio, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ImageUploader } from './components/ImageUploader'
 import { SettingsModal } from './components/SettingsModal'
-import { ResultGrid } from './components/ResultGrid'
 import { HistoryPanel } from './components/HistoryPanel'
+import { TaskQueue } from './components/TaskQueue'
 import { createId, generateImagesDirect, generateImagesStream } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory } from './lib/db'
-import { RATIO_SIZE } from './lib/ratios'
+import { getRatioSize } from './lib/ratios'
 import { DEFAULT_SETTINGS, loadSettings, maskSecret, saveSettings } from './lib/storage'
 import './styles.css'
 
@@ -18,11 +18,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('text-to-image')
   const [prompt, setPrompt] = useState('')
-  const [ratio, setRatio] = useState<Ratio>(() => loadSettings().defaultRatio)
-  const [inputImage, setInputImage] = useState<InputImage | null>(null)
-  const [results, setResults] = useState<GenerateResultItem[]>([])
+  const [ratio, setRatio] = useState<AspectRatio>(() => loadSettings().defaultRatio)
+  const [inputImages, setInputImages] = useState<InputImage[]>([])
+  const [tasks, setTasks] = useState<GenerationTask[]>([])
   const [history, setHistory] = useState<HistoryItem[]>([])
-  const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<Message>(null)
 
   useEffect(() => {
@@ -39,6 +38,19 @@ export default function App() {
 
   function patchSettings(patch: Partial<AppSettings>) {
     updateSettings({ ...settings, ...patch })
+  }
+
+  function patchTask(id: string, patch: Partial<GenerationTask>) {
+    setTasks((prev) => prev.map((task) => task.id === id ? { ...task, ...patch } : task))
+  }
+
+  function updateTaskResult(taskId: string, result: GenerateResultItem) {
+    setTasks((prev) => prev.map((task) => {
+      if (task.id !== taskId) return task
+      const nextResults = [...task.results]
+      nextResults[result.index] = result
+      return { ...task, results: nextResults.filter(Boolean) }
+    }))
   }
 
   function updateSettings(next: AppSettings) {
@@ -64,11 +76,11 @@ export default function App() {
     if (!settings.apiKey.trim()) return '请先填写 API Key'
     if (!settings.model.trim()) return '请先填写模型名称'
     if (!prompt.trim()) return '请输入提示词'
-    if (mode === 'image-to-image' && !inputImage) return '图生图模式需要先上传参考图'
+    if (mode === 'image-to-image' && inputImages.length === 0) return '图生图模式需要先上传参考图'
     return ''
   }
 
-  async function handleGenerate() {
+  function handleGenerate() {
     const invalid = validateBeforeGenerate()
     if (invalid) {
       showMessage(invalid, 'error')
@@ -76,53 +88,89 @@ export default function App() {
       return
     }
 
-    setLoading(true)
-    setResults([])
     setMessage(null)
     updateSettings(settings)
 
-    try {
-      const startedAt = Date.now()
-      const payload = {
-        mode,
-        prompt: prompt.trim(),
-        ratio,
-        model: settings.model.trim(),
-        baseUrl: settings.baseUrl.trim(),
-        apiKey: settings.apiKey.trim(),
-        timeoutSec: settings.timeoutSec,
-        count: settings.count,
-        concurrency: settings.concurrency,
-        inputImage: mode === 'image-to-image' ? inputImage : null,
-      }
-      const collected = new Array<GenerateResultItem>()
-      const onResult = (result: GenerateResultItem) => {
-        collected[result.index] = result
-        setResults(collected.filter(Boolean))
-      }
-      let lastPingAt = 0
+    const startedAt = Date.now()
+    const taskId = createId('task')
+    const payload = {
+      mode,
+      prompt: prompt.trim(),
+      ratio,
+      model: settings.model.trim(),
+      baseUrl: settings.baseUrl.trim(),
+      apiKey: settings.apiKey.trim(),
+      timeoutSec: settings.timeoutSec,
+      count: settings.count,
+      concurrency: settings.concurrency,
+      inputImages: mode === 'image-to-image' ? inputImages.map((image) => ({ ...image })) : [],
+    }
 
-      const response = settings.requestMode === 'direct'
-        ? await generateImagesDirect(payload, onResult)
-        : await generateImagesStream(payload, settings.accessPassword, (event) => {
-            if (event.event === 'result') onResult(event.data)
+    const task: GenerationTask = {
+      id: taskId,
+      createdAt: startedAt,
+      mode,
+      requestMode: settings.requestMode,
+      prompt: payload.prompt,
+      ratio,
+      size,
+      model: payload.model,
+      count: payload.count,
+      concurrency: payload.concurrency,
+      status: 'running',
+      results: [],
+    }
+    setTasks((prev) => [task, ...prev])
+    showMessage('任务已提交，可以继续提交新任务', 'ok')
+    void runGenerationTask(taskId, payload, settings.requestMode, settings.accessPassword, startedAt)
+  }
+
+  async function runGenerationTask(
+    taskId: string,
+    payload: {
+      mode: Mode
+      prompt: string
+      ratio: AspectRatio
+      model: string
+      baseUrl: string
+      apiKey: string
+      timeoutSec: number
+      count: number
+      concurrency: number
+      inputImages: InputImage[]
+    },
+    requestMode: AppSettings['requestMode'],
+    accessPassword: string,
+    startedAt: number,
+  ) {
+    try {
+      let lastPingAt = 0
+      const response = requestMode === 'direct'
+        ? await generateImagesDirect(payload, (result) => updateTaskResult(taskId, result))
+        : await generateImagesStream(payload, accessPassword, (event) => {
+            if (event.event === 'result') updateTaskResult(taskId, event.data)
             if (event.event === 'ping' && Date.now() - lastPingAt > 30_000) {
               lastPingAt = Date.now()
               showMessage('Worker 代理连接保持中...', 'info')
             }
           })
 
-      setResults(response.results)
       const okImages = response.results.filter((item) => item.ok && item.image).map((item) => item.image!)
       const failedCount = response.results.length - okImages.length
 
+      patchTask(taskId, {
+        status: 'completed',
+        results: response.results,
+        elapsedMs: response.elapsedMs,
+      })
+
       if (okImages.length) {
         await addHistory({
-          id: createId('task'),
+          id: taskId,
           createdAt: startedAt,
-          mode,
-          prompt: prompt.trim(),
-          ratio,
+          mode: payload.mode,
+          prompt: payload.prompt,
+          ratio: payload.ratio,
           size: response.size,
           model: response.model,
           images: okImages,
@@ -133,23 +181,34 @@ export default function App() {
       }
 
       showMessage(
-        failedCount ? `完成 ${okImages.length} 张，失败 ${failedCount} 张` : `成功生成 ${okImages.length} 张图片`,
+        failedCount ? `任务完成 ${okImages.length} 张，失败 ${failedCount} 张` : `任务成功生成 ${okImages.length} 张图片`,
         failedCount ? 'info' : 'ok',
       )
     } catch (error) {
-      showMessage(error instanceof Error ? error.message : '生成失败', 'error')
-    } finally {
-      setLoading(false)
+      const message = error instanceof Error ? error.message : '生成失败'
+      patchTask(taskId, {
+        status: 'failed',
+        error: message,
+        elapsedMs: Date.now() - startedAt,
+      })
+      showMessage(message, 'error')
     }
   }
 
   function handleUseAsReference(dataUrl: string) {
-    setInputImage({
+    const nextImage = {
       id: createId('ref'),
       name: 'generated-reference.png',
       type: dataUrl.slice(5, dataUrl.indexOf(';')) || 'image/png',
       dataUrl,
       size: dataUrl.length,
+    }
+    setInputImages((prev) => {
+      if (prev.length >= 8) {
+        showMessage('参考图最多 8 张，已替换为当前图片', 'info')
+        return [nextImage]
+      }
+      return [...prev, nextImage]
     })
     setMode('image-to-image')
     showMessage('已放入图生图参考图', 'ok')
@@ -166,7 +225,15 @@ export default function App() {
     await refreshHistory()
   }
 
-  const size = RATIO_SIZE[ratio]
+  function removeTask(id: string) {
+    setTasks((prev) => prev.filter((task) => task.id !== id))
+  }
+
+  function clearFinishedTasks() {
+    setTasks((prev) => prev.filter((task) => task.status === 'running'))
+  }
+
+  const size = getRatioSize(ratio)
 
   return (
     <div className="app-shell">
@@ -218,7 +285,7 @@ export default function App() {
           {mode === 'image-to-image' ? (
             <section className="panel">
               <label className="label">参考图片</label>
-              <ImageUploader image={inputImage} onChange={setInputImage} onError={(text) => showMessage(text, 'error')} />
+              <ImageUploader images={inputImages} onChange={setInputImages} onError={(text) => showMessage(text, 'error')} />
             </section>
           ) : null}
 
@@ -257,8 +324,8 @@ export default function App() {
             </label>
           </section>
 
-          <button type="button" className="generate-btn" onClick={handleGenerate} disabled={loading}>
-            {loading ? '生成中...' : `生成 ${settings.count} 张`}
+          <button type="button" className="generate-btn" onClick={handleGenerate}>
+            提交任务（{settings.count} 张）
           </button>
         </aside>
 
@@ -269,12 +336,12 @@ export default function App() {
               <p>{mode === 'image-to-image' ? '图生图' : '文生图'} · {ratio} · {size} · {settings.requestMode === 'worker' ? 'Worker 流式代理' : '浏览器直连'} · 并发 {settings.concurrency}</p>
             </div>
           </div>
-          <ResultGrid
-            loading={loading}
-            placeholders={settings.count}
-            results={results}
+          <TaskQueue
+            tasks={tasks}
             onUseAsReference={handleUseAsReference}
             onMessage={showMessage}
+            onRemove={removeTask}
+            onClearFinished={clearFinishedTasks}
           />
         </section>
 
