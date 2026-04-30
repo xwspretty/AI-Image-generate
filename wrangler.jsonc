@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-image-generate",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-04-30",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "vars": {
+    "ACCESS_PASSWORD": "change-me",
+    "ALLOW_HTTP_API": "true",
+    "ALLOW_PRIVATE_HOSTS": "false"
+  }
+}
