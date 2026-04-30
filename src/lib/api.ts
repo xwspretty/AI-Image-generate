@@ -194,7 +194,25 @@ export async function uploadImageToPixhost(
   return { remoteUrl: data.showUrl, remoteThumbUrl: data.thumbUrl }
 }
 
-export function downloadDataUrl(dataUrl: string, fileName: string) {
+type NativeBridge = {
+  copyText?: (text: string) => string
+  copyImage?: (dataUrl: string, fileName: string) => string
+  saveImage?: (dataUrl: string, fileName: string) => string
+}
+
+declare global {
+  interface Window {
+    AIImageApp?: NativeBridge
+  }
+}
+
+export async function downloadDataUrl(dataUrl: string, fileName: string) {
+  const nativeResult = callNativeBridge('saveImage', dataUrl, fileName)
+  if (nativeResult.handled) {
+    if (nativeResult.ok) return
+    throw new Error(nativeResult.message || 'App 保存图片失败')
+  }
+
   const a = document.createElement('a')
   a.href = dataUrl
   a.download = fileName
@@ -203,12 +221,66 @@ export function downloadDataUrl(dataUrl: string, fileName: string) {
   a.remove()
 }
 
-export async function copyImageToClipboard(dataUrl: string) {
+export async function copyTextToClipboard(text: string) {
+  const nativeResult = callNativeBridge('copyText', text)
+  if (nativeResult.handled) {
+    if (nativeResult.ok) return
+    throw new Error(nativeResult.message || 'App 复制失败')
+  }
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // fall through to textarea fallback
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  textarea.setAttribute('readonly', 'readonly')
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  const ok = document.execCommand('copy')
+  textarea.remove()
+  if (!ok) throw new Error('复制失败，当前环境未授权剪贴板')
+}
+
+export async function copyImageToClipboard(dataUrl: string, fileName = 'ai-image.png') {
+  const nativeResult = callNativeBridge('copyImage', dataUrl, fileName)
+  if (nativeResult.handled) {
+    if (nativeResult.ok) return
+    throw new Error(nativeResult.message || 'App 复制图片失败')
+  }
+
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    throw new Error('当前环境不支持直接复制图片，请使用下载或复制 URL')
+  }
+
   const response = await fetch(dataUrl)
   const blob = await response.blob()
   await navigator.clipboard.write([
     new ClipboardItem({ [blob.type || 'image/png']: blob }),
   ])
+}
+
+function callNativeBridge(method: 'copyText', text: string): { handled: boolean; ok: boolean; message?: string }
+function callNativeBridge(method: 'copyImage' | 'saveImage', dataUrl: string, fileName: string): { handled: boolean; ok: boolean; message?: string }
+function callNativeBridge(method: keyof NativeBridge, ...args: string[]) {
+  const fn = window.AIImageApp?.[method]
+  if (typeof fn !== 'function') return { handled: false, ok: false }
+  try {
+    const result = String((fn as (...values: string[]) => string)(...args) || '')
+    if (result === 'ok' || result.startsWith('ok:')) return { handled: true, ok: true }
+    return { handled: true, ok: false, message: result.replace(/^error:/, '') || 'App 原生操作失败' }
+  } catch (error) {
+    return { handled: true, ok: false, message: error instanceof Error ? error.message : 'App 原生操作失败' }
+  }
 }
 
 async function generateOneDirect(payload: GenerateRequest, index: number): Promise<GenerateResultItem> {

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { HistoryItem } from '../types'
 import { getResolutionLabel } from '../lib/ratios'
-import { copyImageToClipboard } from '../lib/api'
+import { copyImageToClipboard, copyTextToClipboard } from '../lib/api'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 interface Props {
@@ -43,19 +43,19 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
 
   async function copyHistoryImage(src: string) {
     try {
-      await copyImageToClipboard(src)
+      await copyImageToClipboard(src, `ai-image-history-${Date.now()}.png`)
       onMessage('历史图片已复制到剪贴板', 'ok')
-    } catch {
-      onMessage('复制失败，浏览器可能未授权剪贴板', 'error')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '复制失败，浏览器可能未授权剪贴板', 'error')
     }
   }
 
   async function copyHistoryUrl(url: string) {
     try {
-      await navigator.clipboard.writeText(url)
+      await copyTextToClipboard(url)
       onMessage('历史图床 URL 已复制', 'ok')
-    } catch {
-      onMessage('复制 URL 失败，浏览器可能未授权剪贴板', 'error')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '复制 URL 失败，浏览器可能未授权剪贴板', 'error')
     }
   }
 

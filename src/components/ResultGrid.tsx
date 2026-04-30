@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { GenerateResultItem } from '../types'
-import { copyImageToClipboard, downloadDataUrl } from '../lib/api'
+import { copyImageToClipboard, copyTextToClipboard, downloadDataUrl } from '../lib/api'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 interface Props {
@@ -51,19 +51,28 @@ export function ResultGrid({ loading, placeholders, results, onUploadImage, onUs
 
   async function copyResultImage(src: string) {
     try {
-      await copyImageToClipboard(src)
+      await copyImageToClipboard(src, `ai-image-${Date.now()}.png`)
       onMessage('图片已复制到剪贴板', 'ok')
-    } catch {
-      onMessage('复制失败，浏览器可能未授权剪贴板', 'error')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '复制失败，浏览器可能未授权剪贴板', 'error')
     }
   }
 
   async function copyRemoteUrl(url: string) {
     try {
-      await navigator.clipboard.writeText(url)
+      await copyTextToClipboard(url)
       onMessage('图床 URL 已复制', 'ok')
-    } catch {
-      onMessage('复制 URL 失败，浏览器可能未授权剪贴板', 'error')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '复制 URL 失败，浏览器可能未授权剪贴板', 'error')
+    }
+  }
+
+  async function downloadResultImage(src: string, index: number) {
+    try {
+      await downloadDataUrl(src, `ai-image-${Date.now()}-${index + 1}.png`)
+      onMessage('图片已保存', 'ok')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '下载失败，请稍后重试', 'error')
     }
   }
 
@@ -104,7 +113,7 @@ export function ResultGrid({ loading, placeholders, results, onUploadImage, onUs
               <div className="card-toolbar">
                 <button
                   type="button"
-                  onClick={() => downloadDataUrl(card.image!, `ai-image-${Date.now()}-${card.index + 1}.png`)}
+                  onClick={() => void downloadResultImage(card.image!, card.index)}
                 >下载</button>
                 <button type="button" onClick={() => void copyResultImage(card.image!)}>复制</button>
                 <button type="button" onClick={() => onUseAsReference(card.image!)}>作为参考图</button>
