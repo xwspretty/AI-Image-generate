@@ -272,10 +272,18 @@ export async function copyImageToClipboard(dataUrl: string, fileName = 'ai-image
 function callNativeBridge(method: 'copyText', text: string): { handled: boolean; ok: boolean; message?: string }
 function callNativeBridge(method: 'copyImage' | 'saveImage', dataUrl: string, fileName: string): { handled: boolean; ok: boolean; message?: string }
 function callNativeBridge(method: keyof NativeBridge, ...args: string[]) {
-  const fn = window.AIImageApp?.[method]
+  const bridge = window.AIImageApp
+  const fn = bridge?.[method]
   if (typeof fn !== 'function') return { handled: false, ok: false }
   try {
-    const result = String((fn as (...values: string[]) => string)(...args) || '')
+    // Android WebView 的 @JavascriptInterface 方法必须从注入对象本身调用。
+    // 不能先取出方法再 fn(...) 调用，否则部分机型会报：
+    // "Java bridge method can't be invoked on a non-injected object"。
+    const result = method === 'copyText'
+      ? String(bridge!.copyText!(args[0] || '') || '')
+      : method === 'copyImage'
+        ? String(bridge!.copyImage!(args[0] || '', args[1] || '') || '')
+        : String(bridge!.saveImage!(args[0] || '', args[1] || '') || '')
     if (result === 'ok' || result.startsWith('ok:')) return { handled: true, ok: true }
     return { handled: true, ok: false, message: result.replace(/^error:/, '') || 'App 原生操作失败' }
   } catch (error) {
