@@ -19,6 +19,7 @@
 - 支持比例：`自动`、`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`9:16`、`16:9`。
 - 支持分辨率档位：`自动`、`标准`、`2K`、`4K`。
 - 支持生成结果操作：下载、复制到剪贴板、作为图生图参考图、放大预览。
+- 支持自动上传生成图到 PiXhost 图床，图片悬浮时可一键复制图床 URL。
 - 支持超时时间：默认 420 秒，最大 900 秒。
 - 历史记录保存在浏览器 IndexedDB。
 
@@ -84,6 +85,7 @@ image[]
 - Worker 使用 SSE 保活，生成期间每 10 秒发送一次 `ping`。
 - 多图生成时，哪一张先完成就先返回哪一张。
 - 需要填写 Worker 访问密码。
+- 自动上传 PiXhost 图床也通过 Worker 代理，并复用同一个 Worker 访问密码。
 
 ### 浏览器直连
 
@@ -95,6 +97,23 @@ image[]
 - 上游必须支持浏览器 CORS。
 - HTTPS 页面无法直连 HTTP API；这种情况请使用 Worker 代理。
 - 如果出现 `Failed to fetch`，通常是 CORS 或网络策略问题。
+
+## PiXhost 图床上传
+
+在「设置」里开启 **生成成功后自动上传到 PiXhost 图床** 后，每张成功生成的图片会自动上传到 PiXhost。上传成功后，鼠标悬浮到结果图上会出现 **复制URL** 按钮，点击可复制 PiXhost 返回的图片页面地址。
+
+实现说明：
+
+- 前端把生成图的 `data URL` 发送到 Worker 的 `POST /api/upload-pixhost`。
+- Worker 校验访问密码后，用 `multipart/form-data` 调用 PiXhost `POST https://api.pixhost.to/images`。
+- 上传字段：
+  - `img`：图片文件。
+  - `content_type=0`：按 PiXhost 文档表示 safe 图片。
+  - `max_th_size=420`：缩略图最大尺寸。
+- 返回后使用 PiXhost 的 `show_url` 作为复制 URL。
+- PiXhost 限制：支持 `JPG / PNG / GIF`，单张最大 `10MB`。4K PNG 可能超过 10MB，超过时会显示上传失败，但不影响原图下载。
+
+> 自动上传会把图片发送到第三方图床。涉及私密图片时请不要开启。
 
 ## 一键部署
 

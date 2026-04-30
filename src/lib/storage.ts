@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   concurrency: 2,
   defaultRatio: 'auto',
   defaultResolution: 'standard',
+  autoUploadPixhost: false,
   rememberSecrets: true,
 }
 
@@ -39,6 +40,7 @@ function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     concurrency: clampNumber(raw.concurrency, DEFAULT_SETTINGS.concurrency, 1, 6),
     defaultRatio: normalizeRatio(raw.defaultRatio),
     defaultResolution: normalizeResolution(raw.defaultResolution),
+    autoUploadPixhost: raw.autoUploadPixhost === true,
     rememberSecrets: raw.rememberSecrets !== false,
   }
 }

@@ -177,6 +177,18 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
           <label className="check-field full">
             <input
               type="checkbox"
+              checked={draft.autoUploadPixhost}
+              onChange={(e) => setDraft({ ...draft, autoUploadPixhost: e.target.checked })}
+            />
+            生成成功后自动上传到 PiXhost 图床，结果图悬浮时可复制 URL
+          </label>
+          <small className="settings-note full">
+            自动上传会把生成图片发送到第三方图床；该功能通过 Worker 代理上传，需要填写 Worker 访问密码。
+          </small>
+
+          <label className="check-field full">
+            <input
+              type="checkbox"
               checked={draft.rememberSecrets}
               onChange={(e) => setDraft({ ...draft, rememberSecrets: e.target.checked })}
             />

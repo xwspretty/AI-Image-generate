@@ -57,15 +57,37 @@ export function ResultGrid({ loading, placeholders, results, onUseAsReference, o
           ) : card.ok && card.image ? (
             <>
               <img src={card.image} alt={`生成结果 ${card.index + 1}`} />
-              <button
-                type="button"
-                className="zoom-btn"
-                onClick={() => setPreview({ src: card.image!, title: `生成结果 ${card.index + 1}` })}
-                aria-label={`放大预览第 ${card.index + 1} 张图片`}
-                title="放大预览"
-              >
-                ⛶
-              </button>
+              <div className="floating-actions">
+                {card.remoteUrl ? (
+                  <button
+                    type="button"
+                    className="url-copy-btn"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(card.remoteUrl!)
+                        onMessage('图床 URL 已复制', 'ok')
+                      } catch {
+                        onMessage('复制 URL 失败，浏览器可能未授权剪贴板', 'error')
+                      }
+                    }}
+                  >
+                    复制URL
+                  </button>
+                ) : card.uploading ? (
+                  <button type="button" className="url-copy-btn" disabled>上传中</button>
+                ) : card.uploadError ? (
+                  <button type="button" className="url-copy-btn error" title={card.uploadError}>上传失败</button>
+                ) : null}
+                <button
+                  type="button"
+                  className="zoom-btn"
+                  onClick={() => setPreview({ src: card.image!, title: `生成结果 ${card.index + 1}` })}
+                  aria-label={`放大预览第 ${card.index + 1} 张图片`}
+                  title="放大预览"
+                >
+                  ⛶
+                </button>
+              </div>
               <div className="card-toolbar">
                 <button
                   type="button"

@@ -31,6 +31,11 @@ interface GeneratePayload {
   inputImage?: InputImagePayload | null
 }
 
+interface PixhostUploadPayload {
+  image?: string
+  fileName?: string
+}
+
 interface NormalizedPayload {
   mode: Mode
   prompt: string
@@ -104,6 +109,10 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, Authorization',
 }
 
+const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images'
+const PIXHOST_MAX_BYTES = 10 * 1024 * 1024
+const PIXHOST_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif'])
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
@@ -127,8 +136,68 @@ export default {
       return handleGenerateStream(request, env, ctx)
     }
 
+    if (url.pathname === '/api/upload-pixhost') {
+      const auth = requireAccessPassword(request, env)
+      if (auth) return auth
+      if (request.method !== 'POST') {
+        return jsonError('bad_request', '仅支持 POST 请求', 405)
+      }
+      return handlePixhostUpload(request)
+    }
+
     return env.ASSETS.fetch(request)
   },
+}
+
+async function handlePixhostUpload(request: Request) {
+  let payload: PixhostUploadPayload
+  try {
+    payload = await request.json() as PixhostUploadPayload
+  } catch {
+    return jsonError('bad_request', '请求体不是有效 JSON', 400)
+  }
+
+  try {
+    const { blob, mime } = dataUrlToBlob(payload.image || '')
+    if (!PIXHOST_IMAGE_TYPES.has(mime)) {
+      return jsonError('bad_request', 'PiXhost 仅支持 JPG、PNG、GIF 图片', 400)
+    }
+    if (blob.size > PIXHOST_MAX_BYTES) {
+      return jsonError('bad_request', 'PiXhost 单张图片最大 10MB', 413)
+    }
+
+    const fileName = normalizeUploadFileName(payload.fileName, mime)
+    const form = new FormData()
+    form.append('img', blob, fileName)
+    form.append('content_type', '0')
+    form.append('max_th_size', '420')
+
+    const upstream = await fetch(PIXHOST_UPLOAD_URL, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      body: form,
+    })
+
+    if (!upstream.ok) {
+      return jsonError('upstream_error', await readUpstreamError(upstream), upstream.status)
+    }
+
+    const data = await upstream.json() as Record<string, unknown>
+    const showUrl = typeof data.show_url === 'string' ? data.show_url : ''
+    const thumbUrl = typeof data.th_url === 'string' ? data.th_url : ''
+    if (!showUrl) {
+      return jsonError('upstream_error', 'PiXhost 未返回图片 URL', 502)
+    }
+
+    return json({
+      ok: true,
+      name: typeof data.name === 'string' ? data.name : fileName,
+      showUrl: normalizePublicUrl(showUrl),
+      thumbUrl: thumbUrl ? normalizePublicUrl(thumbUrl) : undefined,
+    })
+  } catch (error) {
+    return jsonError('bad_request', error instanceof Error ? error.message : '图床上传失败', 400)
+  }
 }
 
 async function handleGenerateStream(request: Request, env: Env, ctx: ExecutionContext) {
@@ -400,6 +469,20 @@ async function generateOne(payload: NormalizedPayload, index: number): Promise<R
 
 function buildUpstreamUrl(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
+function normalizeUploadFileName(value: unknown, mime: string) {
+  const ext = mime === 'image/jpeg' ? 'jpg' : mime.split('/')[1] || 'png'
+  const raw = typeof value === 'string' && value.trim() ? value.trim() : `ai-image.${ext}`
+  const safe = raw
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '-')
+    .slice(0, 96)
+  return /\.[a-z0-9]{2,5}$/i.test(safe) ? safe : `${safe}.${ext}`
+}
+
+function normalizePublicUrl(value: string) {
+  return value.startsWith('//') ? `https:${value}` : value
 }
 
 async function callTextImage(payload: NormalizedPayload, signal: AbortSignal) {

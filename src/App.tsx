@@ -6,7 +6,7 @@ import { ImageUploader } from './components/ImageUploader'
 import { SettingsModal } from './components/SettingsModal'
 import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
-import { createId, generateImagesDirect, generateImagesStream } from './lib/api'
+import { createId, generateImagesDirect, generateImagesStream, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory } from './lib/db'
 import { getImageSize, getResolutionLabel } from './lib/ratios'
 import { DEFAULT_SETTINGS, loadSettings, maskSecret, saveSettings } from './lib/storage'
@@ -54,8 +54,31 @@ export default function App() {
     setTasks((prev) => prev.map((task) => {
       if (task.id !== taskId) return task
       const nextResults = [...task.results]
-      nextResults[result.index] = result
+      nextResults[result.index] = { ...nextResults[result.index], ...result }
       return { ...task, results: nextResults.filter(Boolean) }
+    }))
+  }
+
+  function patchTaskResult(taskId: string, index: number, patch: Partial<GenerateResultItem>) {
+    setTasks((prev) => prev.map((task) => {
+      if (task.id !== taskId) return task
+      const nextResults = [...task.results]
+      const existing = nextResults.find((item) => item.index === index) || nextResults[index]
+      if (!existing) return task
+      const merged = { ...existing, ...patch, index }
+      const slot = nextResults.findIndex((item) => item.index === index)
+      if (slot >= 0) nextResults[slot] = merged
+      else nextResults[index] = merged
+      return { ...task, results: nextResults.filter(Boolean) }
+    }))
+  }
+
+  function completeTask(taskId: string, responseResults: GenerateResultItem[], elapsedMs: number) {
+    setTasks((prev) => prev.map((task) => {
+      if (task.id !== taskId) return task
+      const localByIndex = new Map(task.results.map((item) => [item.index, item]))
+      const merged = responseResults.map((item) => ({ ...item, ...localByIndex.get(item.index) }))
+      return { ...task, status: 'completed', results: merged, elapsedMs }
     }))
   }
 
@@ -68,6 +91,7 @@ export default function App() {
       timeoutSec: Math.max(10, Math.min(900, Math.round(Number(next.timeoutSec) || DEFAULT_SETTINGS.timeoutSec))),
       defaultRatio: next.defaultRatio,
       defaultResolution: next.defaultResolution,
+      autoUploadPixhost: next.autoUploadPixhost === true,
     }
     setSettings(normalized)
     saveSettings(normalized)
@@ -79,6 +103,7 @@ export default function App() {
 
   function validateBeforeGenerate() {
     if (settings.requestMode === 'worker' && !settings.accessPassword.trim()) return '请先在设置里填写 Worker 访问密码'
+    if (settings.autoUploadPixhost && !settings.accessPassword.trim()) return '自动上传图床需要 Worker 访问密码'
     if (!settings.baseUrl.trim()) return '请先填写 API URL'
     if (!settings.apiKey.trim()) return '请先填写 API Key'
     if (!settings.model.trim()) return '请先填写模型名称'
@@ -131,7 +156,7 @@ export default function App() {
     }
     setTasks((prev) => [task, ...prev])
     showMessage('任务已提交，可以继续提交新任务', 'ok')
-    void runGenerationTask(taskId, payload, settings.requestMode, settings.accessPassword, startedAt)
+    void runGenerationTask(taskId, payload, settings.requestMode, settings.accessPassword, settings.autoUploadPixhost, startedAt)
   }
 
   async function runGenerationTask(
@@ -151,14 +176,21 @@ export default function App() {
     },
     requestMode: AppSettings['requestMode'],
     accessPassword: string,
+    autoUploadPixhost: boolean,
     startedAt: number,
   ) {
     try {
       let lastPingAt = 0
+      const handleResult = (result: GenerateResultItem) => {
+        updateTaskResult(taskId, result)
+        if (autoUploadPixhost) {
+          void uploadGeneratedResult(taskId, result, accessPassword)
+        }
+      }
       const response = requestMode === 'direct'
-        ? await generateImagesDirect(payload, (result) => updateTaskResult(taskId, result))
+        ? await generateImagesDirect(payload, handleResult)
         : await generateImagesStream(payload, accessPassword, (event) => {
-            if (event.event === 'result') updateTaskResult(taskId, event.data)
+            if (event.event === 'result') handleResult(event.data)
             if (event.event === 'ping' && Date.now() - lastPingAt > 30_000) {
               lastPingAt = Date.now()
               showMessage('Worker 代理连接保持中...', 'info')
@@ -168,11 +200,7 @@ export default function App() {
       const okImages = response.results.filter((item) => item.ok && item.image).map((item) => item.image!)
       const failedCount = response.results.length - okImages.length
 
-      patchTask(taskId, {
-        status: 'completed',
-        results: response.results,
-        elapsedMs: response.elapsedMs,
-      })
+      completeTask(taskId, response.results, response.elapsedMs)
 
       if (okImages.length) {
         await addHistory({
@@ -203,6 +231,30 @@ export default function App() {
         elapsedMs: Date.now() - startedAt,
       })
       showMessage(message, 'error')
+    }
+  }
+
+  async function uploadGeneratedResult(taskId: string, result: GenerateResultItem, accessPassword: string) {
+    if (!result.ok || !result.image) return
+
+    patchTaskResult(taskId, result.index, { uploading: true, uploadError: undefined })
+    try {
+      const uploaded = await uploadImageToPixhost(
+        result.image,
+        `ai-image-${taskId}-${result.index + 1}.png`,
+        accessPassword,
+      )
+      patchTaskResult(taskId, result.index, {
+        uploading: false,
+        remoteUrl: uploaded.remoteUrl,
+        remoteThumbUrl: uploaded.remoteThumbUrl,
+        uploadError: undefined,
+      })
+    } catch (error) {
+      patchTaskResult(taskId, result.index, {
+        uploading: false,
+        uploadError: error instanceof Error ? error.message : '图床上传失败',
+      })
     }
   }
 

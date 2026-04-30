@@ -19,6 +19,7 @@ export interface AppSettings {
   concurrency: number
   defaultRatio: AspectRatio
   defaultResolution: ResolutionTier
+  autoUploadPixhost: boolean
   rememberSecrets: boolean
 }
 
@@ -52,6 +53,10 @@ export interface GenerateResultItem {
   error?: string
   status?: number
   elapsedMs?: number
+  remoteUrl?: string
+  remoteThumbUrl?: string
+  uploading?: boolean
+  uploadError?: string
 }
 
 export interface GenerateSuccessResponse {

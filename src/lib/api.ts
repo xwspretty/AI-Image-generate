@@ -166,6 +166,34 @@ export async function checkWorkerPassword(accessPassword: string): Promise<{ ok:
   return { ok: false, message: data?.message || `验证失败：HTTP ${response.status}` }
 }
 
+export async function uploadImageToPixhost(
+  dataUrl: string,
+  fileName: string,
+  accessPassword: string,
+): Promise<{ remoteUrl: string; remoteThumbUrl?: string }> {
+  const response = await fetch('/api/upload-pixhost', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Access-Password': accessPassword,
+    },
+    body: JSON.stringify({ image: dataUrl, fileName }),
+  })
+
+  const data = await response.json().catch(() => null) as {
+    ok?: boolean
+    message?: string
+    showUrl?: string
+    thumbUrl?: string
+  } | null
+
+  if (!response.ok || !data?.ok || !data.showUrl) {
+    throw new Error(data?.message || `图床上传失败：HTTP ${response.status}`)
+  }
+
+  return { remoteUrl: data.showUrl, remoteThumbUrl: data.thumbUrl }
+}
+
 export function downloadDataUrl(dataUrl: string, fileName: string) {
   const a = document.createElement('a')
   a.href = dataUrl
