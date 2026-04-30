@@ -434,6 +434,7 @@ export default function App() {
           onUseImage={handleUseAsReference}
           onDelete={handleDeleteHistory}
           onClear={handleClearHistory}
+          onMessage={showMessage}
         />
       </main>
 

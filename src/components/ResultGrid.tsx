@@ -87,6 +87,15 @@ export function ResultGrid({ loading, placeholders, results, ratio, resolution, 
             <>
               <img src={card.image} alt={`生成结果 ${card.index + 1}`} />
               <div className="floating-actions">
+                <button
+                  type="button"
+                  className="zoom-btn"
+                  onClick={() => openPreview(card)}
+                  aria-label={`放大预览第 ${card.index + 1} 张图片`}
+                  title="放大预览"
+                >
+                  ⛶
+                </button>
                 {card.remoteUrl ? (
                   <button
                     type="button"
@@ -107,15 +116,6 @@ export function ResultGrid({ loading, placeholders, results, ratio, resolution, 
                 ) : card.uploadError ? (
                   <button type="button" className="url-copy-btn error" title={card.uploadError}>上传失败</button>
                 ) : null}
-                <button
-                  type="button"
-                  className="zoom-btn"
-                  onClick={() => openPreview(card)}
-                  aria-label={`放大预览第 ${card.index + 1} 张图片`}
-                  title="放大预览"
-                >
-                  ⛶
-                </button>
               </div>
               <div className="card-toolbar">
                 <button

@@ -1,5 +1,8 @@
-import type { HistoryItem } from '../types'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import type { AspectRatio, HistoryItem, ResolutionTier } from '../types'
 import { getResolutionLabel } from '../lib/ratios'
+import { copyImageToClipboard } from '../lib/api'
 
 interface Props {
   items: HistoryItem[]
@@ -9,6 +12,15 @@ interface Props {
   onUseImage: (dataUrl: string) => void
   onDelete: (id: string) => void
   onClear: () => void
+  onMessage: (message: string, type?: 'ok' | 'error') => void
+}
+
+type PreviewState = {
+  src: string
+  title: string
+  ratio: AspectRatio
+  resolution?: ResolutionTier
+  fileSize: string
 }
 
 function formatTime(ts: number) {
@@ -20,7 +32,45 @@ function formatTime(ts: number) {
   })
 }
 
-export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePrompt, onUseImage, onDelete, onClear }: Props) {
+export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePrompt, onUseImage, onDelete, onClear, onMessage }: Props) {
+  const [preview, setPreview] = useState<PreviewState | null>(null)
+
+  useEffect(() => {
+    if (!preview) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreview(null)
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [preview])
+
+  function openPreview(item: HistoryItem, src: string, index: number) {
+    setPreview({
+      src,
+      title: `历史图片 ${index + 1}`,
+      ratio: item.ratio,
+      resolution: item.resolution,
+      fileSize: formatImageSize(src),
+    })
+  }
+
+  async function copyHistoryImage(src: string) {
+    try {
+      await copyImageToClipboard(src)
+      onMessage('历史图片已复制到剪贴板', 'ok')
+    } catch {
+      onMessage('复制失败，浏览器可能未授权剪贴板', 'error')
+    }
+  }
+
   if (collapsed) {
     return (
       <aside className="history-panel collapsed">
@@ -53,9 +103,16 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
             <article key={item.id} className="history-item">
               <div className="history-thumbs">
                 {item.images.slice(0, 3).map((src, index) => (
-                  <button type="button" key={`${item.id}-${index}`} onClick={() => onUseImage(src)} title="作为参考图">
-                    <img src={src} alt="历史图片" />
-                  </button>
+                  <div className="history-thumb-card" key={`${item.id}-${index}`}>
+                    <button type="button" className="history-thumb-image" onClick={() => openPreview(item, src, index)} title="放大预览">
+                      <img src={src} alt={`历史图片 ${index + 1}`} />
+                    </button>
+                    <div className="history-thumb-actions">
+                      <button type="button" onClick={() => openPreview(item, src, index)}>放大</button>
+                      <button type="button" onClick={() => void copyHistoryImage(src)}>复制</button>
+                      <button type="button" onClick={() => onUseImage(src)}>参考</button>
+                    </div>
+                  </div>
                 ))}
               </div>
               <div className="history-info">
@@ -74,6 +131,38 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
           ))}
         </div>
       )}
+
+      {preview ? createPortal(
+        <div className="preview-mask" onMouseDown={(e) => e.target === e.currentTarget && setPreview(null)}>
+          <div className="preview-dialog" role="dialog" aria-modal="true" aria-label={preview.title}>
+            <button type="button" className="preview-close" onClick={() => setPreview(null)} aria-label="关闭预览">×</button>
+            <div className="preview-info">
+              <span>{preview.resolution ? getResolutionLabel(preview.resolution) : '历史'}</span>
+              <span>{preview.ratio === 'auto' ? '自动比例' : preview.ratio}</span>
+              <span>{preview.fileSize}</span>
+            </div>
+            <img src={preview.src} alt={preview.title} />
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </aside>
   )
+}
+
+function formatImageSize(dataUrl: string) {
+  const bytes = getDataUrlBytes(dataUrl)
+  if (!bytes) return '未知大小'
+  const mb = bytes / 1024 / 1024
+  if (mb >= 1) return `${mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function getDataUrlBytes(dataUrl: string) {
+  const marker = ';base64,'
+  const index = dataUrl.indexOf(marker)
+  if (index < 0) return new TextEncoder().encode(dataUrl).length
+  const base64 = dataUrl.slice(index + marker.length).replace(/\s/g, '')
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor(base64.length * 3 / 4) - padding)
 }
