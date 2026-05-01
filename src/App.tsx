@@ -599,6 +599,41 @@ export default function App() {
     showMessage('已放入图生图参考图', 'ok')
   }
 
+  function handleShowHistoryInResults(item: HistoryItem) {
+    const taskId = `history_${item.id}_${Date.now()}`
+    const results: GenerateResultItem[] = item.images.map((image, index) => {
+      const remoteUrl = item.remoteUrls?.[index] || (/^https?:\/\//i.test(image) ? image : undefined)
+      return {
+        index,
+        ok: true,
+        image,
+        remoteUrl,
+        remoteThumbUrl: item.remoteThumbUrls?.[index],
+      }
+    })
+
+    const task: GenerationTask = {
+      id: taskId,
+      createdAt: item.createdAt,
+      mode: item.mode,
+      requestMode: 'history',
+      prompt: item.prompt,
+      ratio: item.ratio,
+      resolution: item.resolution || 'auto',
+      size: item.size,
+      model: item.model,
+      count: item.images.length,
+      concurrency: 1,
+      status: 'completed',
+      results,
+      elapsedMs: item.elapsedMs,
+    }
+
+    setTasks((prev) => [task, ...prev])
+    showMessage(`已把历史记录放到生成结果区，共 ${item.images.length} 张`, 'ok')
+    window.setTimeout(() => document.querySelector('.canvas-area')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+  }
+
   async function handleDeleteHistory(id: string) {
     await deleteHistory(id)
     await refreshHistory()
@@ -759,6 +794,7 @@ export default function App() {
             showMessage('提示词已复用', 'ok')
           }}
           onUseImage={handleUseAsReference}
+          onShowInResults={handleShowHistoryInResults}
           onDelete={handleDeleteHistory}
           onClear={handleClearHistory}
           onMessage={showMessage}

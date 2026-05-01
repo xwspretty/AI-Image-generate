@@ -217,6 +217,11 @@ export default {
       return handlePixhostUpload(request)
     }
 
+    if (url.pathname === '/api/image-proxy') {
+      if (request.method !== 'GET') return jsonError('bad_request', '仅支持 GET 请求', 405)
+      return handleImageProxy(request, ctx)
+    }
+
     if (url.pathname === '/api/stats') {
       const auth = requireAccessPassword(request, env)
       if (auth) return auth
@@ -321,6 +326,51 @@ async function handlePixhostUpload(request: Request) {
     const message = error instanceof Error ? error.message : '图床上传失败'
     return jsonError(message.includes('10MB') ? 'bad_request' : 'upstream_error', message, message.includes('10MB') ? 413 : 400)
   }
+}
+
+async function handleImageProxy(request: Request, ctx: ExecutionContext) {
+  const requestUrl = new URL(request.url)
+  const target = requestUrl.searchParams.get('url') || ''
+  let imageUrl: URL
+
+  try {
+    imageUrl = new URL(normalizePublicUrl(target))
+  } catch {
+    return jsonError('bad_request', '图片代理 URL 无效', 400)
+  }
+
+  if (!isAllowedPixhostUrl(imageUrl)) {
+    return jsonError('bad_request', '图片代理仅允许 PiXhost 图片域名', 400)
+  }
+
+  const cacheKey = new Request(request.url, { method: 'GET' })
+  const cache = (caches as unknown as { default: Cache }).default
+  const cached = await cache.match(cacheKey)
+  if (cached) return withImageProxyHeaders(cached)
+
+  const upstream = await fetch(imageUrl.toString(), {
+    headers: {
+      Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,image/*,*/*;q=0.8',
+      'User-Agent': 'AI-Image-Generate-Worker/1.0',
+    },
+    cf: {
+      cacheEverything: true,
+      cacheTtl: 60 * 60 * 24 * 7,
+    },
+  })
+
+  if (!upstream.ok) {
+    return jsonError('upstream_error', `图片代理下载失败：HTTP ${upstream.status}`, upstream.status)
+  }
+
+  const contentType = upstream.headers.get('Content-Type') || 'application/octet-stream'
+  if (!contentType.toLowerCase().startsWith('image/')) {
+    return jsonError('upstream_error', '图片代理只允许图片响应', 415)
+  }
+
+  const proxied = withImageProxyHeaders(upstream)
+  ctx.waitUntil(cache.put(cacheKey, proxied.clone()).catch(() => undefined))
+  return proxied
 }
 
 async function handleCreateBackgroundTask(request: Request, env: Env) {
@@ -688,6 +738,31 @@ function normalizeUploadFileName(value: unknown, mime: string) {
 
 function normalizePublicUrl(value: string) {
   return value.startsWith('//') ? `https:${value}` : value
+}
+
+function isAllowedPixhostUrl(url: URL) {
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false
+  const host = url.hostname.toLowerCase()
+  if (host !== 'pixhost.to' && !host.endsWith('.pixhost.to')) return false
+  return (
+    url.pathname.startsWith('/images/')
+    || url.pathname.startsWith('/show/')
+    || url.pathname.startsWith('/thumbs/')
+    || /\.(png|jpe?g|gif|webp|avif)$/i.test(url.pathname)
+  )
+}
+
+function withImageProxyHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set('Access-Control-Allow-Origin', '*')
+  headers.set('Cross-Origin-Resource-Policy', 'cross-origin')
+  headers.set('Cache-Control', 'public, max-age=604800, immutable')
+  headers.delete('Set-Cookie')
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
 
 function toPixhostDirectImageUrl(value: string) {

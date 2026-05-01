@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { HistoryItem } from '../types'
 import { getResolutionLabel } from '../lib/ratios'
-import { copyImageToClipboard, copyTextToClipboard } from '../lib/api'
+import { copyImageToClipboard, copyTextToClipboard, getImageProxyUrl } from '../lib/api'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   onToggleCollapsed: () => void
   onReusePrompt: (prompt: string) => void
   onUseImage: (dataUrl: string) => void
+  onShowInResults: (item: HistoryItem) => void
   onDelete: (id: string) => void
   onClear: () => void
   onMessage: (message: string, type?: 'ok' | 'error') => void
@@ -30,12 +31,12 @@ function formatTime(ts: number) {
   })
 }
 
-export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePrompt, onUseImage, onDelete, onClear, onMessage }: Props) {
+export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePrompt, onUseImage, onShowInResults, onDelete, onClear, onMessage }: Props) {
   const [preview, setPreview] = useState<PreviewState | null>(null)
 
   function openPreview(src: string, index: number, remoteUrl?: string) {
     setPreview({
-      src,
+      src: getImageProxyUrl(src),
       title: `历史图片 ${index + 1}`,
       remoteUrl,
     })
@@ -93,10 +94,12 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
                 {item.images.slice(0, 3).map((src, index) => {
                   const remoteUrl = item.remoteUrls?.[index]
                   const canUseAsReference = src.startsWith('data:')
+                  const hiddenCount = item.images.length - 3
                   return (
                     <div className="history-thumb-card" key={`${item.id}-${index}`}>
                       <button type="button" className="history-thumb-image" onClick={() => openPreview(src, index, remoteUrl)} title="放大预览">
-                        <img src={src} alt={`历史图片 ${index + 1}`} />
+                        <img src={getImageProxyUrl(src)} alt={`历史图片 ${index + 1}`} />
+                        {index === 2 && hiddenCount > 0 ? <span className="history-more-badge">+{hiddenCount}</span> : null}
                       </button>
                       <div className="history-thumb-actions">
                         <button type="button" onClick={() => openPreview(src, index, remoteUrl)}>放大</button>
@@ -117,6 +120,7 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
                 </small>
               </div>
               <div className="history-actions">
+                <button type="button" onClick={() => onShowInResults(item)}>放到结果</button>
                 <button type="button" onClick={() => onReusePrompt(item.prompt)}>复用提示词</button>
                 <button type="button" onClick={() => onDelete(item.id)}>删除</button>
               </div>

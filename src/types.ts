@@ -138,7 +138,7 @@ export interface GenerationTask {
   retryOf?: string
   createdAt: number
   mode: Mode
-  requestMode: RequestMode
+  requestMode: RequestMode | 'history'
   prompt: string
   ratio: AspectRatio
   resolution: ResolutionTier

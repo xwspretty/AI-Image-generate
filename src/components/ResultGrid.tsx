@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { GenerateResultItem } from '../types'
-import { copyImageToClipboard, copyTextToClipboard, downloadDataUrl } from '../lib/api'
+import { copyImageToClipboard, copyTextToClipboard, downloadDataUrl, getImageProxyUrl } from '../lib/api'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 interface Props {
@@ -44,7 +44,7 @@ export function ResultGrid({ loading, placeholders, results, onUploadImage, onUs
     const src = card.image || card.remoteUrl
     if (!src) return
     setPreview({
-      src,
+      src: getImageProxyUrl(src),
       title: `生成结果 ${card.index + 1}`,
       remoteUrl: card.remoteUrl,
     })
@@ -89,10 +89,11 @@ export function ResultGrid({ loading, placeholders, results, onUploadImage, onUs
           ) : card.ok && (card.image || card.remoteUrl) ? (
             (() => {
               const src = card.image || card.remoteUrl!
+              const displaySrc = getImageProxyUrl(src)
               const canUseAsReference = Boolean(card.image?.startsWith('data:'))
               return (
             <>
-              <img src={src} alt={`生成结果 ${card.index + 1}`} />
+              <img src={displaySrc} alt={`生成结果 ${card.index + 1}`} />
               <div className="floating-actions">
                 <button
                   type="button"

@@ -250,6 +250,13 @@ export async function uploadImageToPixhost(
   return { remoteUrl: data.showUrl, remoteThumbUrl: data.thumbUrl }
 }
 
+export function getImageProxyUrl(src: string) {
+  if (!src || src.startsWith('data:') || src.startsWith('blob:')) return src
+  if (!/^https?:\/\//i.test(src) && !src.startsWith('//')) return src
+  const normalized = src.startsWith('//') ? `${window.location.protocol}${src}` : src
+  return `/api/image-proxy?url=${encodeURIComponent(normalized)}`
+}
+
 async function postJson<T>(url: string, body: unknown, accessPassword: string): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
@@ -294,20 +301,31 @@ declare global {
 }
 
 export async function downloadDataUrl(dataUrl: string, fileName: string) {
-  if (dataUrl.startsWith('data:image/')) {
-    const nativeResult = await callNativeBridge('saveImage', dataUrl, fileName)
-    if (nativeResult.handled) {
-      if (nativeResult.ok) return
-      throw new Error(nativeResult.message || 'App 保存图片失败')
-    }
+  let fallbackHref = dataUrl
+  let nativeDataUrl = dataUrl
+  let objectUrl = ''
+
+  if (!dataUrl.startsWith('data:image/')) {
+    const blob = await fetchImageBlob(dataUrl)
+    nativeDataUrl = await blobToDataUrl(blob, blob.type || 'image/png')
+    objectUrl = URL.createObjectURL(blob)
+    fallbackHref = objectUrl
+  }
+
+  const nativeResult = await callNativeBridge('saveImage', nativeDataUrl, fileName)
+  if (nativeResult.handled) {
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    if (nativeResult.ok) return
+    throw new Error(nativeResult.message || 'App 保存图片失败')
   }
 
   const a = document.createElement('a')
-  a.href = dataUrl
+  a.href = fallbackHref
   a.download = fileName
   document.body.appendChild(a)
   a.click()
   a.remove()
+  if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
 }
 
 export async function copyTextToClipboard(text: string) {
@@ -341,23 +359,29 @@ export async function copyTextToClipboard(text: string) {
 }
 
 export async function copyImageToClipboard(dataUrl: string, fileName = 'ai-image.png') {
-  if (dataUrl.startsWith('data:image/')) {
-    const nativeResult = await callNativeBridge('copyImage', dataUrl, fileName)
-    if (nativeResult.handled) {
-      if (nativeResult.ok) return
-      throw new Error(nativeResult.message || 'App 复制图片失败')
-    }
+  const blob = dataUrl.startsWith('data:image/') ? await fetch(dataUrl).then((response) => response.blob()) : await fetchImageBlob(dataUrl)
+  const nativeDataUrl = dataUrl.startsWith('data:image/') ? dataUrl : await blobToDataUrl(blob, blob.type || 'image/png')
+
+  const nativeResult = await callNativeBridge('copyImage', nativeDataUrl, fileName)
+  if (nativeResult.handled) {
+    if (nativeResult.ok) return
+    throw new Error(nativeResult.message || 'App 复制图片失败')
   }
 
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
     throw new Error('当前环境不支持直接复制图片，请使用下载或复制 URL')
   }
-
-  const response = await fetch(dataUrl)
-  const blob = await response.blob()
   await navigator.clipboard.write([
     new ClipboardItem({ [blob.type || 'image/png']: blob }),
   ])
+}
+
+async function fetchImageBlob(src: string) {
+  const response = await fetch(getImageProxyUrl(src), { cache: 'force-cache' })
+  if (!response.ok) throw new Error(formatHttpError(response.status, '图片代理下载失败'))
+  const blob = await response.blob()
+  if (!blob.type.startsWith('image/')) throw new Error('图片代理返回的不是图片')
+  return blob
 }
 
 async function callNativeBridge(method: 'copyText', text: string): Promise<{ handled: boolean; ok: boolean; message?: string }>
