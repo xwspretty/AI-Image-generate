@@ -1,4 +1,4 @@
-import type { AspectRatio, Ratio, ResolutionTier } from '../src/types'
+import type { AspectRatio, GenerateResultItem, Ratio, ResolutionTier, WorkerTaskSnapshot } from '../src/types'
 
 interface Env {
   ASSETS: Fetcher
@@ -112,6 +112,8 @@ const CORS_HEADERS = {
 const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images'
 const PIXHOST_MAX_BYTES = 10 * 1024 * 1024
 const PIXHOST_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif'])
+const TASK_CACHE_PREFIX = 'https://ai-image-generate.worker.internal/tasks/'
+const TASK_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -136,6 +138,25 @@ export default {
       return handleGenerateStream(request, env, ctx)
     }
 
+    if (url.pathname === '/api/tasks') {
+      const auth = requireAccessPassword(request, env)
+      if (auth) return auth
+      if (request.method !== 'POST') {
+        return jsonError('bad_request', '仅支持 POST 请求', 405)
+      }
+      return handleCreateTask(request, env, ctx)
+    }
+
+    const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/)
+    if (taskMatch) {
+      const auth = requireAccessPassword(request, env)
+      if (auth) return auth
+      if (request.method !== 'GET') {
+        return jsonError('bad_request', '仅支持 GET 请求', 405)
+      }
+      return handleGetTask(taskMatch[1])
+    }
+
     if (url.pathname === '/api/upload-pixhost') {
       const auth = requireAccessPassword(request, env)
       if (auth) return auth
@@ -147,6 +168,124 @@ export default {
 
     return env.ASSETS.fetch(request)
   },
+}
+
+async function handleCreateTask(request: Request, env: Env, ctx: ExecutionContext) {
+  let payload: GeneratePayload
+  try {
+    payload = await request.json() as GeneratePayload
+  } catch {
+    return jsonError('bad_request', '请求体不是有效 JSON', 400)
+  }
+
+  let data: NormalizedPayload
+  try {
+    data = normalizePayload(payload, env)
+  } catch (error) {
+    return jsonError('invalid_config', error instanceof Error ? error.message : '参数无效', 400)
+  }
+
+  const now = Date.now()
+  const task: WorkerTaskSnapshot = {
+    id: createTaskId(),
+    createdAt: now,
+    updatedAt: now,
+    status: 'running',
+    mode: data.mode,
+    ratio: data.ratio,
+    resolution: data.resolution,
+    size: data.size,
+    model: data.model,
+    prompt: data.prompt,
+    count: data.count,
+    concurrency: data.concurrency,
+    results: [],
+  }
+
+  await saveTaskSnapshot(task)
+  ctx.waitUntil(runBackgroundTask(task, data).catch(async (error) => {
+    await saveTaskSnapshot({
+      ...task,
+      updatedAt: Date.now(),
+      status: 'failed',
+      elapsedMs: Date.now() - task.createdAt,
+      error: error instanceof Error ? error.message : '后台任务失败',
+    }).catch(() => undefined)
+  }))
+
+  return json({ ok: true, task }, 202)
+}
+
+async function handleGetTask(rawId: string) {
+  const id = decodeURIComponent(rawId || '').trim()
+  if (!id) return jsonError('bad_request', '任务 ID 不能为空', 400)
+
+  const cached = await taskCache().match(taskCacheRequest(id))
+  if (!cached) {
+    return jsonError('not_found', '任务不存在或已过期，请重新提交', 404)
+  }
+
+  const task = await cached.json() as WorkerTaskSnapshot
+  return json({ ok: true, task })
+}
+
+async function runBackgroundTask(initialTask: WorkerTaskSnapshot, data: NormalizedPayload) {
+  let task: WorkerTaskSnapshot = { ...initialTask, status: 'running', updatedAt: Date.now() }
+
+  const updateTask = async (patch: Partial<WorkerTaskSnapshot>) => {
+    task = { ...task, ...patch, updatedAt: Date.now() }
+    await saveTaskSnapshot(task)
+  }
+
+  try {
+    await updateTask({ status: 'running' })
+
+    const tasks = Array.from({ length: data.count }, (_, index) => () => generateOne(data, index))
+    await runPoolWithEmit(tasks, data.concurrency, async (result) => {
+      const nextResults = mergeResult(task.results, result)
+      await updateTask({ results: nextResults })
+    })
+
+    await updateTask({
+      status: 'completed',
+      elapsedMs: Date.now() - task.createdAt,
+    })
+  } catch (error) {
+    await updateTask({
+      status: 'failed',
+      elapsedMs: Date.now() - task.createdAt,
+      error: error instanceof Error ? error.message : '后台任务失败',
+    })
+  }
+}
+
+function mergeResult(results: GenerateResultItem[], result: GenerateResultItem) {
+  const next = [...results]
+  const index = next.findIndex((item) => item.index === result.index)
+  if (index >= 0) next[index] = { ...next[index], ...result }
+  else next[result.index] = result
+  return next.filter(Boolean).sort((a, b) => a.index - b.index)
+}
+
+function createTaskId() {
+  return `task_${Date.now()}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`
+}
+
+function taskCacheRequest(id: string) {
+  return new Request(`${TASK_CACHE_PREFIX}${encodeURIComponent(id)}`, { method: 'GET' })
+}
+
+async function saveTaskSnapshot(task: WorkerTaskSnapshot) {
+  await taskCache().put(taskCacheRequest(task.id), new Response(JSON.stringify(task), {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': `public, max-age=${TASK_CACHE_TTL_SECONDS}`,
+    },
+  }))
+}
+
+function taskCache(): Cache {
+  return (caches as unknown as { default: Cache }).default
 }
 
 async function handlePixhostUpload(request: Request) {

@@ -67,7 +67,7 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
                 className={draft.requestMode === 'worker' ? 'active' : ''}
                 onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'worker' }))}
               >
-                Worker 流式代理
+                Worker 后台代理
               </button>
               <button
                 type="button"
@@ -78,7 +78,7 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
               </button>
             </div>
             <small>
-              Worker 代理可绕过 CORS，并会用 SSE 保活；浏览器直连链路更短，但上游必须允许 CORS。
+              Worker 代理可绕过 CORS，并支持后台任务恢复；浏览器直连链路更短，但上游必须允许 CORS。
             </small>
           </div>
 
