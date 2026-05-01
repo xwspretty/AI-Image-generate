@@ -6,8 +6,6 @@ import type {
   GenerateSuccessResponse,
   InputImage,
   StreamEvent,
-  WorkerTaskResponse,
-  WorkerTaskSnapshot,
 } from '../types'
 import { getImageSize } from './ratios'
 
@@ -166,49 +164,6 @@ export async function checkWorkerPassword(accessPassword: string): Promise<{ ok:
   if (response.ok) return { ok: true, message: 'Worker 密码验证通过' }
   const data = await response.json().catch(() => null) as { message?: string } | null
   return { ok: false, message: data?.message || `验证失败：HTTP ${response.status}` }
-}
-
-export async function createWorkerGenerationTask(
-  payload: GenerateRequest,
-  accessPassword: string,
-): Promise<WorkerTaskSnapshot> {
-  const response = await fetch('/api/tasks', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Access-Password': accessPassword,
-    },
-    body: JSON.stringify(payload),
-  })
-
-  const data = await response.json().catch(() => null) as WorkerTaskResponse | GenerateErrorResponse | null
-  if (!response.ok || !data || data.ok !== true) {
-    const message = data && data.ok === false ? data.message : formatHttpError(response.status, '后台任务提交失败')
-    throw new Error(message)
-  }
-
-  return data.task
-}
-
-export async function getWorkerGenerationTask(
-  taskId: string,
-  accessPassword: string,
-): Promise<WorkerTaskSnapshot> {
-  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-    headers: {
-      'X-Access-Password': accessPassword,
-      'Cache-Control': 'no-store',
-    },
-    cache: 'no-store',
-  })
-
-  const data = await response.json().catch(() => null) as WorkerTaskResponse | GenerateErrorResponse | null
-  if (!response.ok || !data || data.ok !== true) {
-    const message = data && data.ok === false ? data.message : formatHttpError(response.status, '后台任务查询失败')
-    throw new Error(message)
-  }
-
-  return data.task
 }
 
 export async function uploadImageToPixhost(

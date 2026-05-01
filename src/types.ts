@@ -72,34 +72,9 @@ export interface GenerateSuccessResponse {
 
 export interface GenerateErrorResponse {
   ok: false
-  type: 'auth_error' | 'invalid_config' | 'upstream_error' | 'bad_request' | 'internal_error' | 'not_found'
+  type: 'auth_error' | 'invalid_config' | 'upstream_error' | 'bad_request' | 'internal_error'
   message: string
   status?: number
-}
-
-export type WorkerTaskStatus = 'running' | 'completed' | 'failed'
-
-export interface WorkerTaskSnapshot {
-  id: string
-  createdAt: number
-  updatedAt: number
-  status: WorkerTaskStatus
-  mode: Mode
-  ratio: AspectRatio
-  resolution: ResolutionTier
-  size: string
-  model: string
-  prompt: string
-  count: number
-  concurrency: number
-  elapsedMs?: number
-  results: GenerateResultItem[]
-  error?: string
-}
-
-export interface WorkerTaskResponse {
-  ok: true
-  task: WorkerTaskSnapshot
 }
 
 export type StreamEvent =

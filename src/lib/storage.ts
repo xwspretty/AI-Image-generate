@@ -2,14 +2,6 @@ import type { AppSettings, AspectRatio, ResolutionTier } from '../types'
 
 const SETTINGS_KEY = 'ai-image-generate:settings:v1'
 const SESSION_SETTINGS_KEY = 'ai-image-generate:session-settings:v1'
-const ACTIVE_WORKER_TASKS_KEY = 'ai-image-generate:active-worker-tasks:v1'
-
-export interface ActiveWorkerTaskRecord {
-  id: string
-  accessPassword: string
-  autoUploadPixhost: boolean
-  savedAt: number
-}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   requestMode: 'worker',
@@ -94,35 +86,4 @@ export function maskSecret(value: string) {
   if (!value) return '未填写'
   if (value.length <= 8) return '••••••••'
   return `${value.slice(0, 4)}••••••••${value.slice(-4)}`
-}
-
-export function loadActiveWorkerTasks(): ActiveWorkerTaskRecord[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(ACTIVE_WORKER_TASKS_KEY)
-    if (!raw) return []
-    const list = JSON.parse(raw) as Partial<ActiveWorkerTaskRecord>[]
-    if (!Array.isArray(list)) return []
-    return list
-      .filter((item): item is ActiveWorkerTaskRecord => Boolean(item?.id && item.accessPassword))
-      .sort((a, b) => b.savedAt - a.savedAt)
-  } catch {
-    return []
-  }
-}
-
-export function rememberActiveWorkerTask(record: ActiveWorkerTaskRecord) {
-  if (typeof window === 'undefined') return
-  const existing = loadActiveWorkerTasks().filter((item) => item.id !== record.id)
-  localStorage.setItem(ACTIVE_WORKER_TASKS_KEY, JSON.stringify([
-    { ...record, savedAt: record.savedAt || Date.now() },
-    ...existing,
-  ].slice(0, 20)))
-}
-
-export function removeActiveWorkerTask(id: string) {
-  if (typeof window === 'undefined') return
-  const next = loadActiveWorkerTasks().filter((item) => item.id !== id)
-  if (next.length) localStorage.setItem(ACTIVE_WORKER_TASKS_KEY, JSON.stringify(next))
-  else localStorage.removeItem(ACTIVE_WORKER_TASKS_KEY)
 }
