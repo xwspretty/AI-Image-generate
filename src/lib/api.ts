@@ -195,9 +195,9 @@ export async function uploadImageToPixhost(
 }
 
 type NativeBridge = {
-  copyText?: (text: string) => string
-  copyImage?: (dataUrl: string, fileName: string) => string
-  saveImage?: (dataUrl: string, fileName: string) => string
+  copyText?: (text: string) => string | Promise<string>
+  copyImage?: (dataUrl: string, fileName: string) => string | Promise<string>
+  saveImage?: (dataUrl: string, fileName: string) => string | Promise<string>
 }
 
 declare global {
@@ -207,7 +207,7 @@ declare global {
 }
 
 export async function downloadDataUrl(dataUrl: string, fileName: string) {
-  const nativeResult = callNativeBridge('saveImage', dataUrl, fileName)
+  const nativeResult = await callNativeBridge('saveImage', dataUrl, fileName)
   if (nativeResult.handled) {
     if (nativeResult.ok) return
     throw new Error(nativeResult.message || 'App 保存图片失败')
@@ -222,7 +222,7 @@ export async function downloadDataUrl(dataUrl: string, fileName: string) {
 }
 
 export async function copyTextToClipboard(text: string) {
-  const nativeResult = callNativeBridge('copyText', text)
+  const nativeResult = await callNativeBridge('copyText', text)
   if (nativeResult.handled) {
     if (nativeResult.ok) return
     throw new Error(nativeResult.message || 'App 复制失败')
@@ -252,7 +252,7 @@ export async function copyTextToClipboard(text: string) {
 }
 
 export async function copyImageToClipboard(dataUrl: string, fileName = 'ai-image.png') {
-  const nativeResult = callNativeBridge('copyImage', dataUrl, fileName)
+  const nativeResult = await callNativeBridge('copyImage', dataUrl, fileName)
   if (nativeResult.handled) {
     if (nativeResult.ok) return
     throw new Error(nativeResult.message || 'App 复制图片失败')
@@ -269,9 +269,9 @@ export async function copyImageToClipboard(dataUrl: string, fileName = 'ai-image
   ])
 }
 
-function callNativeBridge(method: 'copyText', text: string): { handled: boolean; ok: boolean; message?: string }
-function callNativeBridge(method: 'copyImage' | 'saveImage', dataUrl: string, fileName: string): { handled: boolean; ok: boolean; message?: string }
-function callNativeBridge(method: keyof NativeBridge, ...args: string[]) {
+async function callNativeBridge(method: 'copyText', text: string): Promise<{ handled: boolean; ok: boolean; message?: string }>
+async function callNativeBridge(method: 'copyImage' | 'saveImage', dataUrl: string, fileName: string): Promise<{ handled: boolean; ok: boolean; message?: string }>
+async function callNativeBridge(method: keyof NativeBridge, ...args: string[]) {
   const bridge = window.AIImageApp
   const fn = bridge?.[method]
   if (typeof fn !== 'function') return { handled: false, ok: false }
@@ -280,10 +280,10 @@ function callNativeBridge(method: keyof NativeBridge, ...args: string[]) {
     // 不能先取出方法再 fn(...) 调用，否则部分机型会报：
     // "Java bridge method can't be invoked on a non-injected object"。
     const result = method === 'copyText'
-      ? String(bridge!.copyText!(args[0] || '') || '')
+      ? String(await bridge!.copyText!(args[0] || '') || '')
       : method === 'copyImage'
-        ? String(bridge!.copyImage!(args[0] || '', args[1] || '') || '')
-        : String(bridge!.saveImage!(args[0] || '', args[1] || '') || '')
+        ? String(await bridge!.copyImage!(args[0] || '', args[1] || '') || '')
+        : String(await bridge!.saveImage!(args[0] || '', args[1] || '') || '')
     if (result === 'ok' || result.startsWith('ok:')) return { handled: true, ok: true }
     return { handled: true, ok: false, message: result.replace(/^error:/, '') || 'App 原生操作失败' }
   } catch (error) {
