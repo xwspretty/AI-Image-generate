@@ -12,7 +12,7 @@ export interface AppSettings {
   requestMode: RequestMode
   baseUrl: string
   apiKey: string
-  accessPassword: string
+  identityToken: string
   model: string
   timeoutSec: number
   count: number

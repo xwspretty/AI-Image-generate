@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import type { AppSettings, AspectRatio, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
@@ -9,7 +9,17 @@ import { TaskQueue } from './components/TaskQueue'
 import { createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
-import { addActiveBackgroundTask, loadActiveBackgroundTasks, removeActiveBackgroundTask, DEFAULT_SETTINGS, loadSettings, saveSettings } from './lib/storage'
+import {
+  addActiveBackgroundTask,
+  DEFAULT_SETTINGS,
+  IDENTITY_TOKEN_MIN_LENGTH,
+  isValidIdentityToken,
+  loadActiveBackgroundTasks,
+  loadSettings,
+  normalizeIdentityToken,
+  removeActiveBackgroundTask,
+  saveSettings,
+} from './lib/storage'
 import './styles.css'
 
 type Message = { text: string; type: 'ok' | 'error' | 'info' } | null
@@ -19,6 +29,7 @@ type UploadResult = { index: number; remoteUrl: string; remoteThumbUrl?: string 
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [identityDraft, setIdentityDraft] = useState(() => loadSettings().identityToken)
   const [mode, setMode] = useState<Mode>('text-to-image')
   const [prompt, setPrompt] = useState('')
   const [ratio, setRatio] = useState<AspectRatio>(() => loadSettings().defaultRatio)
@@ -44,9 +55,10 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!settings.accessPassword.trim()) return
+    if (!isValidIdentityToken(settings.identityToken)) return
     void restoreActiveBackgroundTasks(false)
-  }, [settings.accessPassword])
+    void refreshBackgroundStats()
+  }, [settings.identityToken])
 
   useEffect(() => {
     const handleResume = () => {
@@ -139,7 +151,17 @@ export default function App() {
       timeoutSec: Math.max(10, Math.min(900, Math.round(Number(next.timeoutSec) || DEFAULT_SETTINGS.timeoutSec))),
       defaultRatio: next.defaultRatio,
       defaultResolution: next.defaultResolution,
+      identityToken: normalizeIdentityToken(next.identityToken),
       autoUploadPixhost: next.autoUploadPixhost === true,
+    }
+    const identityChanged = normalizeIdentityToken(settingsRef.current.identityToken) !== normalized.identityToken
+    if (identityChanged) {
+      for (const timer of pollTimersRef.current.values()) window.clearTimeout(timer)
+      pollTimersRef.current.clear()
+      uploadCacheRef.current.clear()
+      setTasks([])
+      setBackgroundStats(null)
+      setIdentityDraft(normalized.identityToken)
     }
     setSettings(normalized)
     saveSettings(normalized)
@@ -150,10 +172,10 @@ export default function App() {
   }
 
   async function refreshBackgroundStats() {
-    const password = settingsRef.current.accessPassword.trim()
-    if (!password) return
+    const identityToken = normalizeIdentityToken(settingsRef.current.identityToken)
+    if (!isValidIdentityToken(identityToken)) return
     try {
-      setBackgroundStats(await getBackgroundStats(password))
+      setBackgroundStats(await getBackgroundStats(identityToken))
     } catch {
       // 未配置 D1 / Workflows 时不阻塞主流程
     }
@@ -225,13 +247,13 @@ export default function App() {
   }
 
   async function hydrateCloudTaskLocalImages(task: BackgroundTask): Promise<BackgroundTask> {
-    const password = settingsRef.current.accessPassword.trim()
-    if (!password || !task.results.some((item) => item.localImageUrl && !item.image)) return task
+    const identityToken = normalizeIdentityToken(settingsRef.current.identityToken)
+    if (!isValidIdentityToken(identityToken) || !task.results.some((item) => item.localImageUrl && !item.image)) return task
 
     const hydratedResults = await Promise.all(task.results.map(async (item) => {
       if (!item.localImageUrl || item.image) return item
       try {
-        const local = await fetchBackgroundTaskImage(item.localImageUrl, password)
+        const local = await fetchBackgroundTaskImage(item.localImageUrl, identityToken)
         return {
           ...item,
           image: local.dataUrl,
@@ -251,17 +273,18 @@ export default function App() {
   }
 
   async function applyCloudTask(task: BackgroundTask) {
+    const identityToken = normalizeIdentityToken(settingsRef.current.identityToken)
     const hydratedTask = await hydrateCloudTaskLocalImages(task)
     upsertTask(cloudTaskToGenerationTask(hydratedTask))
     if (isCloudTaskFinished(hydratedTask)) {
-      removeActiveBackgroundTask(hydratedTask.id)
+      removeActiveBackgroundTask(hydratedTask.id, identityToken)
       const timer = pollTimersRef.current.get(task.id)
       if (timer) window.clearTimeout(timer)
       pollTimersRef.current.delete(task.id)
       await saveCloudTaskToHistory(hydratedTask)
       await refreshBackgroundStats()
     } else {
-      addActiveBackgroundTask(hydratedTask.id, hydratedTask.createdAt)
+      addActiveBackgroundTask(hydratedTask.id, hydratedTask.createdAt, identityToken)
       startBackgroundPolling(hydratedTask.id)
     }
   }
@@ -270,14 +293,14 @@ export default function App() {
     if (pollTimersRef.current.has(taskId)) return
 
     const tick = async () => {
-      const password = settingsRef.current.accessPassword.trim()
-      if (!password) {
+      const identityToken = normalizeIdentityToken(settingsRef.current.identityToken)
+      if (!isValidIdentityToken(identityToken)) {
         pollTimersRef.current.delete(taskId)
         return
       }
 
       try {
-        const task = await getBackgroundTask(taskId, password)
+        const task = await getBackgroundTask(taskId, identityToken)
         await applyCloudTask(task)
         if (!isCloudTaskFinished(task)) {
           const timer = window.setTimeout(tick, 5000)
@@ -295,16 +318,16 @@ export default function App() {
   }
 
   async function restoreActiveBackgroundTasks(notify: boolean) {
-    const password = settingsRef.current.accessPassword.trim()
-    if (!password) return
-    const active = loadActiveBackgroundTasks()
+    const identityToken = normalizeIdentityToken(settingsRef.current.identityToken)
+    if (!isValidIdentityToken(identityToken)) return
+    const active = loadActiveBackgroundTasks(identityToken)
     if (!active.length) {
       await refreshBackgroundStats()
       return
     }
 
     try {
-      const tasks = await Promise.all(active.map((item) => getBackgroundTask(item.id, password)))
+      const tasks = await Promise.all(active.map((item) => getBackgroundTask(item.id, identityToken)))
       for (const task of tasks) await applyCloudTask(task)
       if (notify) showMessage(`已恢复 ${tasks.length} 个后台任务`, 'ok')
     } catch (error) {
@@ -313,15 +336,14 @@ export default function App() {
   }
 
   async function syncCloudTasks() {
-    const password = settings.accessPassword.trim()
-    if (!password) {
-      showMessage('同步云端任务需要先填写 Worker 访问密码', 'error')
-      setSettingsOpen(true)
+    const identityToken = normalizeIdentityToken(settings.identityToken)
+    if (!isValidIdentityToken(identityToken)) {
+      showMessage(`请先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`, 'error')
       return
     }
     setSyncingCloudTasks(true)
     try {
-      const cloudTasks = await listBackgroundTasks(password, 30)
+      const cloudTasks = await listBackgroundTasks(identityToken, 30)
       for (const task of cloudTasks) await applyCloudTask(task)
       showMessage(`已同步 ${cloudTasks.length} 个云端任务`, 'ok')
     } catch (error) {
@@ -332,8 +354,7 @@ export default function App() {
   }
 
   function validateBeforeGenerate() {
-    if ((settings.requestMode === 'worker' || settings.requestMode === 'background') && !settings.accessPassword.trim()) return '请先在设置里填写 Worker 访问密码'
-    if (settings.autoUploadPixhost && !settings.accessPassword.trim()) return '自动上传图床需要 Worker 访问密码'
+    if (!isValidIdentityToken(settings.identityToken)) return `请先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`
     if (!settings.baseUrl.trim()) return '请先填写 API URL'
     if (!settings.apiKey.trim()) return '请先填写 API Key'
     if (!settings.model.trim()) return '请先填写模型名称'
@@ -371,7 +392,7 @@ export default function App() {
 
     if (settings.requestMode === 'background') {
       showMessage(mode === 'image-to-image' ? '正在创建后台任务并上传参考图...' : '正在创建后台任务...', 'info')
-      void submitBackgroundTask(payload, settings.accessPassword)
+      void submitBackgroundTask(payload, settings.identityToken)
       return
     }
 
@@ -392,7 +413,7 @@ export default function App() {
     }
     setTasks((prev) => [task, ...prev])
     showMessage('任务已提交，可以继续提交新任务', 'ok')
-    void runGenerationTask(taskId, payload, settings.requestMode, settings.accessPassword, settings.autoUploadPixhost, startedAt)
+    void runGenerationTask(taskId, payload, settings.requestMode, settings.identityToken, settings.autoUploadPixhost, startedAt)
   }
 
   async function submitBackgroundTask(
@@ -409,11 +430,11 @@ export default function App() {
       concurrency: number
       inputImages: InputImage[]
     },
-    accessPassword: string,
+    identityToken: string,
   ) {
     try {
-      const cloudTask = await createBackgroundTask(payload, accessPassword)
-      addActiveBackgroundTask(cloudTask.id, cloudTask.createdAt)
+      const cloudTask = await createBackgroundTask(payload, identityToken)
+      addActiveBackgroundTask(cloudTask.id, cloudTask.createdAt, identityToken)
       await applyCloudTask(cloudTask)
       showMessage('后台任务已提交，App 切后台也不会丢任务，回前台会自动恢复', 'ok')
     } catch (error) {
@@ -437,7 +458,7 @@ export default function App() {
       inputImages: InputImage[]
     },
     requestMode: AppSettings['requestMode'],
-    accessPassword: string,
+    identityToken: string,
     autoUploadPixhost: boolean,
     startedAt: number,
   ) {
@@ -447,12 +468,12 @@ export default function App() {
       const handleResult = (result: GenerateResultItem) => {
         updateTaskResult(taskId, result)
         if (autoUploadPixhost) {
-          uploadPromises.push(uploadGeneratedResult(taskId, result, accessPassword))
+          uploadPromises.push(uploadGeneratedResult(taskId, result, identityToken))
         }
       }
       const response = requestMode === 'direct'
         ? await generateImagesDirect(payload, handleResult)
-        : await generateImagesStream(payload, accessPassword, (event) => {
+        : await generateImagesStream(payload, identityToken, (event) => {
             if (event.event === 'result') handleResult(event.data)
             if (event.event === 'ping' && Date.now() - lastPingAt > 30_000) {
               lastPingAt = Date.now()
@@ -525,7 +546,7 @@ export default function App() {
   async function uploadGeneratedResult(
     taskId: string,
     result: GenerateResultItem,
-    accessPassword: string,
+    identityToken: string,
     notify = false,
   ): Promise<UploadResult | null> {
     if (!result.ok || !result.image) return null
@@ -535,7 +556,7 @@ export default function App() {
       const uploaded = await uploadImageToPixhost(
         result.image,
         `ai-image-${taskId}-${result.index + 1}.png`,
-        accessPassword,
+        identityToken,
       )
       const uploadResult = { index: result.index, ...uploaded }
       patchTaskResult(taskId, result.index, {
@@ -559,13 +580,13 @@ export default function App() {
   }
 
   function handleUploadImage(taskId: string, result: GenerateResultItem) {
-    if (!settings.accessPassword.trim()) {
-      showMessage('上传图床需要先填写 Worker 访问密码', 'error')
-      setSettingsOpen(true)
+    const identityToken = normalizeIdentityToken(settings.identityToken)
+    if (!isValidIdentityToken(identityToken)) {
+      showMessage(`上传图床需要先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`, 'error')
       return
     }
     if (result.uploading) return
-    void uploadGeneratedResult(taskId, result, settings.accessPassword, true).then(async (uploaded) => {
+    void uploadGeneratedResult(taskId, result, identityToken, true).then(async (uploaded) => {
       if (!uploaded) return
       await updateHistoryImageUrl(taskId, uploaded.index, uploaded.remoteUrl, uploaded.remoteThumbUrl)
       await refreshHistory()
@@ -573,9 +594,9 @@ export default function App() {
   }
 
   async function handleRetryBackgroundTask(taskId: string) {
-    if (!settings.accessPassword.trim()) {
-      showMessage('重试后台任务需要先填写 Worker 访问密码', 'error')
-      setSettingsOpen(true)
+    const identityToken = normalizeIdentityToken(settings.identityToken)
+    if (!isValidIdentityToken(identityToken)) {
+      showMessage(`重试后台任务需要先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`, 'error')
       return
     }
     if (!settings.apiKey.trim()) {
@@ -594,9 +615,9 @@ export default function App() {
           concurrency: settings.concurrency,
           model: settings.model.trim(),
         },
-        settings.accessPassword.trim(),
+        identityToken,
       )
-      addActiveBackgroundTask(cloudTask.id, cloudTask.createdAt)
+      addActiveBackgroundTask(cloudTask.id, cloudTask.createdAt, identityToken)
       await applyCloudTask(cloudTask)
       showMessage('已创建重试后台任务', 'ok')
     } catch (error) {
@@ -679,6 +700,54 @@ export default function App() {
   }
 
   const size = getImageSize(ratio, resolution)
+  const identityReady = isValidIdentityToken(settings.identityToken)
+
+  function handleIdentitySubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const token = normalizeIdentityToken(identityDraft)
+    if (!isValidIdentityToken(token)) {
+      showMessage(`身份令牌至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位`, 'error')
+      return
+    }
+    updateSettings({ ...settings, identityToken: token })
+    showMessage('身份令牌已启用，同令牌会同步同一个云端任务空间', 'ok')
+  }
+
+  if (!identityReady) {
+    return (
+      <div className="app-shell identity-shell">
+        <section className="identity-card">
+          <div className="brand identity-brand">
+            <div className="brand-mark">AI</div>
+            <div>
+              <h1>AI Image Generate</h1>
+              <p>请输入身份令牌后进入工作台</p>
+            </div>
+          </div>
+          <form className="identity-form" onSubmit={handleIdentitySubmit}>
+            <label className="field full">
+              <span>身份令牌</span>
+              <input
+                type="password"
+                value={identityDraft}
+                placeholder={`自定义至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，例如 my-space-2026`}
+                autoComplete="off"
+                autoFocus
+                onChange={(e) => setIdentityDraft(e.target.value)}
+              />
+              <small>输入相同身份令牌会进入同一个云端任务空间；不同令牌之间任务互相隔离。</small>
+            </label>
+            <button type="submit" className="primary-btn">进入</button>
+          </form>
+          {message ? (
+            <div className={`identity-message ${message.type}`}>
+              {message.text}
+            </div>
+          ) : null}
+        </section>
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">
@@ -775,6 +844,7 @@ export default function App() {
             />
             <small className="hint-text">
               当前请求尺寸：{size}。只有「分辨率=自动」且「比例=自动」时才不传 size；只要选择具体比例就会传实际尺寸，避免 16:9 变成竖图。
+              {resolution === '4k' ? ' 生成4K速度相较于其他分辨率较慢，且 OpenAI 官方链路在 4K 生图时可能不稳定；如果出现 502，建议直接重试或切换其他线路。' : ''}
             </small>
           </section>
 

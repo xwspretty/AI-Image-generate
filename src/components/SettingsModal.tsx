@@ -1,7 +1,6 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AppSettings } from '../types'
-import { clearSettings, maskSecret } from '../lib/storage'
-import { checkWorkerPassword } from '../lib/api'
+import { clearSettings, IDENTITY_TOKEN_MIN_LENGTH, isValidIdentityToken, maskSecret, normalizeIdentityToken } from '../lib/storage'
 
 interface Props {
   open: boolean
@@ -14,7 +13,6 @@ interface Props {
 export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Props) {
   const [draft, setDraft] = useState(settings)
   const [showSecrets, setShowSecrets] = useState(false)
-  const [testing, setTesting] = useState(false)
 
   useEffect(() => {
     if (open) setDraft(settings)
@@ -23,26 +21,19 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
   if (!open) return null
 
   function save() {
-    onSave(draft)
+    const identityToken = normalizeIdentityToken(draft.identityToken)
+    if (!isValidIdentityToken(identityToken)) {
+      onMessage(`身份令牌至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位`, 'error')
+      return
+    }
+    onSave({ ...draft, identityToken })
     onClose()
     onMessage('设置已保存到浏览器本地', 'ok')
   }
 
-  async function testPassword() {
-    setTesting(true)
-    try {
-      const result = await checkWorkerPassword(draft.accessPassword)
-      onMessage(result.message, result.ok ? 'ok' : 'error')
-    } catch (error) {
-      onMessage(error instanceof Error ? error.message : '测试失败', 'error')
-    } finally {
-      setTesting(false)
-    }
-  }
-
   function clearLocal() {
     clearSettings()
-    onSave({ ...settings, apiKey: '', accessPassword: '' })
+    onSave({ ...settings, apiKey: '', identityToken: '' })
     onMessage('已清空浏览器内保存的配置', 'ok')
     onClose()
   }
@@ -53,7 +44,7 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
         <header className="modal-header">
           <div>
             <h2>设置</h2>
-            <p>API Key / URL / Worker 密码只保存在你的浏览器里。</p>
+            <p>API Key / URL / 身份令牌只保存在你的浏览器里。</p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose}>×</button>
         </header>
@@ -112,21 +103,16 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
           </label>
 
           <label className="field full">
-            <span>Worker 访问密码</span>
-            <div className="inline-input">
-              <input
-                type={showSecrets ? 'text' : 'password'}
-                value={draft.accessPassword}
-                placeholder="wrangler.jsonc 里的 ACCESS_PASSWORD"
-                autoComplete="off"
-                onChange={(e) => setDraft({ ...draft, accessPassword: e.target.value })}
-              />
-              <button type="button" className="secondary-btn" onClick={testPassword} disabled={testing}>
-                {testing ? '测试中' : '测试'}
-              </button>
-            </div>
+            <span>身份令牌</span>
+            <input
+              type={showSecrets ? 'text' : 'password'}
+              value={draft.identityToken}
+              placeholder={`自定义至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，相同令牌共享云端任务`}
+              autoComplete="off"
+              onChange={(e) => setDraft({ ...draft, identityToken: e.target.value })}
+            />
             <small>
-              Worker 流式代理 / 后台任务需要。密码在 Worker 环境变量 <code>ACCESS_PASSWORD</code> 里改。
+              当前：{maskSecret(draft.identityToken)}。同步云端任务只会返回这个身份令牌下的任务。
             </small>
           </label>
 
@@ -178,7 +164,7 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
               checked={showSecrets}
               onChange={(e) => setShowSecrets(e.target.checked)}
             />
-            显示密钥和密码
+            显示密钥和令牌
           </label>
 
           <label className="check-field full">

@@ -4,12 +4,14 @@ import { normalizeRatioForResolution } from './ratios'
 const SETTINGS_KEY = 'ai-image-generate:settings:v1'
 const SESSION_SETTINGS_KEY = 'ai-image-generate:session-settings:v1'
 const ACTIVE_BACKGROUND_TASKS_KEY = 'ai-image-generate:active-background-tasks:v1'
+const SCOPED_ACTIVE_BACKGROUND_TASKS_KEY = 'ai-image-generate:active-background-tasks:v2'
+export const IDENTITY_TOKEN_MIN_LENGTH = 10
 
 export const DEFAULT_SETTINGS: AppSettings = {
   requestMode: 'worker',
   baseUrl: 'https://api.openai.com/v1',
   apiKey: '',
-  accessPassword: '',
+  identityToken: '',
   model: 'gpt-image-2',
   timeoutSec: 420,
   count: 1,
@@ -35,6 +37,7 @@ function normalizeResolution(value: unknown): ResolutionTier {
 function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
   const defaultResolution = normalizeResolution(raw.defaultResolution)
   const defaultRatio = normalizeRatioForResolution(normalizeRatio(raw.defaultRatio), defaultResolution)
+  const identityToken = typeof raw.identityToken === 'string' ? raw.identityToken.trim() : DEFAULT_SETTINGS.identityToken
   return {
     ...DEFAULT_SETTINGS,
     ...raw,
@@ -44,6 +47,7 @@ function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     concurrency: clampNumber(raw.concurrency, DEFAULT_SETTINGS.concurrency, 1, 6),
     defaultRatio,
     defaultResolution,
+    identityToken,
     autoUploadPixhost: raw.autoUploadPixhost === true,
     rememberSecrets: raw.rememberSecrets !== false,
   }
@@ -91,10 +95,35 @@ export interface ActiveBackgroundTask {
   createdAt: number
 }
 
-export function loadActiveBackgroundTasks(): ActiveBackgroundTask[] {
+export function normalizeIdentityToken(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function isValidIdentityToken(value: unknown) {
+  return normalizeIdentityToken(value).length >= IDENTITY_TOKEN_MIN_LENGTH
+}
+
+function identityStorageSuffix(identityToken: string) {
+  const normalized = normalizeIdentityToken(identityToken)
+  let hash = 2166136261
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash ^= normalized.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function activeBackgroundTasksKey(identityToken: string) {
+  const normalized = normalizeIdentityToken(identityToken)
+  if (!normalized) return ACTIVE_BACKGROUND_TASKS_KEY
+  return `${SCOPED_ACTIVE_BACKGROUND_TASKS_KEY}:${identityStorageSuffix(normalized)}`
+}
+
+export function loadActiveBackgroundTasks(identityToken = ''): ActiveBackgroundTask[] {
   if (typeof window === 'undefined') return []
+  if (!isValidIdentityToken(identityToken)) return []
   try {
-    const saved = localStorage.getItem(ACTIVE_BACKGROUND_TASKS_KEY)
+    const saved = localStorage.getItem(activeBackgroundTasksKey(identityToken))
     if (!saved) return []
     const parsed = JSON.parse(saved) as ActiveBackgroundTask[]
     if (!Array.isArray(parsed)) return []
@@ -106,21 +135,22 @@ export function loadActiveBackgroundTasks(): ActiveBackgroundTask[] {
   }
 }
 
-export function saveActiveBackgroundTasks(tasks: ActiveBackgroundTask[]) {
+export function saveActiveBackgroundTasks(tasks: ActiveBackgroundTask[], identityToken = '') {
   if (typeof window === 'undefined') return
+  if (!isValidIdentityToken(identityToken)) return
   const compact = tasks
     .filter((item, index, arr) => item.id && arr.findIndex((other) => other.id === item.id) === index)
     .slice(0, 50)
-  localStorage.setItem(ACTIVE_BACKGROUND_TASKS_KEY, JSON.stringify(compact))
+  localStorage.setItem(activeBackgroundTasksKey(identityToken), JSON.stringify(compact))
 }
 
-export function addActiveBackgroundTask(id: string, createdAt = Date.now()) {
-  const tasks = loadActiveBackgroundTasks()
-  saveActiveBackgroundTasks([{ id, createdAt }, ...tasks.filter((item) => item.id !== id)])
+export function addActiveBackgroundTask(id: string, createdAt = Date.now(), identityToken = '') {
+  const tasks = loadActiveBackgroundTasks(identityToken)
+  saveActiveBackgroundTasks([{ id, createdAt }, ...tasks.filter((item) => item.id !== id)], identityToken)
 }
 
-export function removeActiveBackgroundTask(id: string) {
-  saveActiveBackgroundTasks(loadActiveBackgroundTasks().filter((item) => item.id !== id))
+export function removeActiveBackgroundTask(id: string, identityToken = '') {
+  saveActiveBackgroundTasks(loadActiveBackgroundTasks(identityToken).filter((item) => item.id !== id), identityToken)
 }
 
 export function maskSecret(value: string) {

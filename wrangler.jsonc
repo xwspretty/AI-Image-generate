@@ -30,7 +30,6 @@
     }
   ],
   "vars": {
-    "ACCESS_PASSWORD": "change-me",
     "ALLOW_HTTP_API": "true",
     "ALLOW_PRIVATE_HOSTS": "false"
   }

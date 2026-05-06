@@ -11,7 +11,8 @@
 ## 功能
 
 - API URL / API Key 保存在浏览器本地，不保存在 Worker。
-- Worker 访问密码由 `wrangler.jsonc` 的 `ACCESS_PASSWORD` 控制。
+- 首次进入需要输入至少 10 位身份令牌；相同令牌共享同一个云端任务空间，不同令牌任务互相隔离。
+- Worker 接口不再使用单独访问密码，统一通过身份令牌校验。
 - 支持三种请求方式：`Worker 流式代理`、`Worker 后台任务` 和 `浏览器直连`。
 - 支持文生图与图生图，图生图可上传多张参考图。
 - 支持一次生成多张：按并发数拆成多个单图请求，完成一张展示一张。
@@ -24,7 +25,7 @@
 - 全屏预览已抽离为独立组件，会读取图片真实尺寸，显示实际像素尺寸、实际宽高比和图片文件大小，并支持在预览里复制图片 / URL。
 - 支持自动上传或单张手动上传生成图到 PiXhost 图床；自动上传可关闭，手动上传可在图片悬浮时点击「上传图床」。
 - 上传失败后图片悬浮按钮会显示「重试上传」；上传成功后可复制 PiXhost 图片直链 URL。
-- 后台任务支持失败后重试、云端任务列表同步，并显示「今日已生成」与「累计已生成」统计。
+- 后台任务支持失败后重试、按身份令牌隔离的云端任务列表同步，并显示当前身份空间的「今日已生成」与「累计已生成」统计。
 - 支持超时时间：默认 420 秒，最大 900 秒。
 - 历史记录保存在浏览器 IndexedDB，本地历史栏支持一键收起/展开，历史缩略图支持放大预览、复制、作为参考图，也可以一键「放到结果」在中间区域完整查看多张历史图；已上传图床的图片会同步保存图床 URL，后续可继续复制。
 - 针对常见错误提供明确提示：401 Key 错误或额度问题、403 无权限 / 模型不可用、413 图片太大、429 限流、524 Cloudflare 100 秒熔断、CORS 建议切换 Worker 模式。
@@ -78,7 +79,7 @@ image[]
 | `9:16` | `1008x1792` | `1152x2048` | `2160x3840` |
 | `16:9` | `1792x1008` | `2048x1152` | `3840x2160` |
 
-> 4K 请求通常更慢、费用更高，建议使用 Worker 流式代理并把超时时间设置到 300-600 秒以上。
+> 生成4K速度相较于其他分辨率较慢，且 OpenAI 官方链路在 4K 生图时可能不稳定；如果出现 502，建议直接重试或切换其他线路。
 > 后台任务会优先把结果上传到 PiXhost 保存直链。PiXhost 单张图片最大 10MB；如果原图超过 10MB，Worker 不会压缩，会把原图临时分片存入 D1，前端轮询到结果后再原样拉回本地展示和保存到本地历史。
 
 ## 请求方式
@@ -93,8 +94,8 @@ image[]
 - 可以绕过上游 CORS 限制。
 - Worker 使用 SSE 保活，生成期间每 10 秒发送一次 `ping`。
 - 多图生成时，哪一张先完成就先返回哪一张。
-- 需要填写 Worker 访问密码。
-- 自动上传 PiXhost 图床也通过 Worker 代理，并复用同一个 Worker 访问密码。
+- 需要先输入身份令牌。
+- 自动上传 PiXhost 图床也通过 Worker 代理，并复用同一个身份令牌。
 
 ### Worker 后台任务
 
@@ -106,7 +107,8 @@ image[]
 - 文生图和图生图都支持后台任务；图生图会先把参考图上传 PiXhost，再把参考图 URL 交给 Workflow 使用。
 - 生成结果会自动上传 PiXhost，D1 只保存任务状态、参数摘要和图片直链，不保存生成图片二进制。
 - D1 不保存 API Key；重试失败任务时，需要浏览器当前设置里仍有 API Key。
-- 前端会在 `visibilitychange` / `focus` 时自动同步未完成任务，也可以手动点「同步云端任务」。
+- 前端会在 `visibilitychange` / `focus` 时自动同步当前身份令牌下的未完成任务，也可以手动点「同步云端任务」。
+- D1 会保存身份令牌的 hash（`owner_hash`），不会保存明文身份令牌；查询、重试、图片回传都会校验该归属。
 - 需要 Cloudflare D1 和 Workflows 绑定。
 
 ### 浏览器直连
@@ -130,7 +132,7 @@ image[]
 实现说明：
 
 - 前端把生成图的 `data URL` 发送到 Worker 的 `POST /api/upload-pixhost`。
-- Worker 校验访问密码后，用 `multipart/form-data` 调用 PiXhost `POST https://api.pixhost.to/images`。
+- Worker 校验身份令牌后，用 `multipart/form-data` 调用 PiXhost `POST https://api.pixhost.to/images`。
 - 上传字段：
   - `img`：图片文件。
   - `content_type=0`：按 PiXhost 文档表示 safe 图片。
@@ -152,6 +154,7 @@ image[]
 | --- | --- |
 | `401` | API Key 错误或额度问题，请检查 Key、账户余额和接口权限。 |
 | `403` | 无权限访问该接口或模型，模型可能不可用。 |
+| `502` | 上游网关错误；4K 生图时 OpenAI 官方链路可能不稳定，出现 502 请重试或切换其他线路。 |
 | `413` | 图片太大，请压缩图片、减少参考图或降低分辨率。 |
 | `429` | 请求过多触发限流，请降低并发、减少张数或稍后重试。 |
 | `524` | Cloudflare 100 秒自动熔断，可切换其他线路域名或非 Cloudflare 中转。 |
@@ -159,7 +162,7 @@ image[]
 
 ## 一键部署
 
-点击上方 **Deploy to Cloudflare** 按钮即可从 GitHub 仓库创建 Cloudflare Worker。部署后请在 Cloudflare 控制台或 `wrangler.jsonc` 中把 `ACCESS_PASSWORD` 改成自己的密码。默认值 `change-me` 不会被 Worker 接受。
+点击上方 **Deploy to Cloudflare** 按钮即可从 GitHub 仓库创建 Cloudflare Worker。部署后打开站点，输入至少 10 位身份令牌即可进入对应云端任务空间。
 
 > 注意：按钮依赖 GitHub 上的当前仓库内容。第一次使用前，需要先把代码提交并推送到 `https://github.com/y08lin4/AI-Image-generate`。
 
@@ -191,7 +194,6 @@ npx wrangler d1 migrations apply ai-image-generate --remote
 
 ```jsonc
 "vars": {
-  "ACCESS_PASSWORD": "改成你自己的访问密码",
   "ALLOW_HTTP_API": "true",
   "ALLOW_PRIVATE_HOSTS": "false"
 }
@@ -203,9 +205,9 @@ npx wrangler d1 migrations apply ai-image-generate --remote
 npm run worker:deploy
 ```
 
-4. 打开站点后，在「设置」里填写：
+4. 打开站点后，先输入身份令牌，再在「设置」里填写：
 
-- Worker 访问密码：和 `ACCESS_PASSWORD` 一致
+- 身份令牌：至少 10 位；多设备输入同一个令牌即可同步同一个云端任务空间
 - API URL：例如 `https://api.openai.com/v1`
 - API Key：你的上游 API Key
 - 模型：例如 `gpt-image-2`
@@ -215,7 +217,7 @@ npm run worker:deploy
 
 - Worker 不保存 API Key，也不打印请求体。
 - Worker 后台任务为了断流后继续执行，会把 API Key 传给 Cloudflare Workflow 实例使用；D1 不保存 API Key。
-- `ACCESS_PASSWORD` 只用于防止你的 Worker 被别人直接滥用。
-- 默认值 `change-me` 会被视为未配置，部署后必须修改。
+- 身份令牌用于进入应用、访问 Worker 接口，并区分云端任务归属。
+- Worker 只保存身份令牌 hash，不保存明文身份令牌；令牌本身保存在浏览器本地/会话存储中。
 - 默认阻止代理 localhost、内网 IP 和 metadata 地址。
 - 如果不想允许 HTTP API，把 `ALLOW_HTTP_API` 改成 `false`。

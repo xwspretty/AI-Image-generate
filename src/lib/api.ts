@@ -35,7 +35,7 @@ export function fileToInputImage(file: File): Promise<InputImage> {
 
 export async function generateImagesStream(
   payload: GenerateRequest,
-  accessPassword: string,
+  identityToken: string,
   onEvent: (event: StreamEvent) => void,
 ): Promise<GenerateSuccessResponse> {
   const startedAt = Date.now()
@@ -43,7 +43,7 @@ export async function generateImagesStream(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Access-Password': accessPassword,
+      ...identityHeaders(identityToken),
     },
     body: JSON.stringify(payload),
   })
@@ -134,29 +134,29 @@ export async function generateImagesStream(
 
 export async function createBackgroundTask(
   payload: GenerateRequest,
-  accessPassword: string,
+  identityToken: string,
 ): Promise<BackgroundTask> {
   const data = await postJson<{ ok?: boolean; task?: BackgroundTask; message?: string }>(
     '/api/background-tasks',
     payload,
-    accessPassword,
+    identityToken,
   )
   if (!data.ok || !data.task) throw new Error(data.message || '创建后台任务失败')
   return data.task
 }
 
-export async function getBackgroundTask(taskId: string, accessPassword: string): Promise<BackgroundTask> {
+export async function getBackgroundTask(taskId: string, identityToken: string): Promise<BackgroundTask> {
   const data = await getJson<{ ok?: boolean; task?: BackgroundTask; message?: string }>(
     `/api/background-tasks/${encodeURIComponent(taskId)}`,
-    accessPassword,
+    identityToken,
   )
   if (!data.ok || !data.task) throw new Error(data.message || '查询后台任务失败')
   return data.task
 }
 
-export async function fetchBackgroundTaskImage(localImageUrl: string, accessPassword: string): Promise<{ dataUrl: string; mime: string; size: number }> {
+export async function fetchBackgroundTaskImage(localImageUrl: string, identityToken: string): Promise<{ dataUrl: string; mime: string; size: number }> {
   const response = await fetch(localImageUrl, {
-    headers: { 'X-Access-Password': accessPassword },
+    headers: identityHeaders(identityToken),
     cache: 'force-cache',
   })
   if (!response.ok) {
@@ -172,10 +172,10 @@ export async function fetchBackgroundTaskImage(localImageUrl: string, accessPass
   }
 }
 
-export async function listBackgroundTasks(accessPassword: string, limit = 20): Promise<BackgroundTask[]> {
+export async function listBackgroundTasks(identityToken: string, limit = 20): Promise<BackgroundTask[]> {
   const data = await getJson<{ ok?: boolean; tasks?: BackgroundTask[]; message?: string }>(
     `/api/background-tasks?limit=${encodeURIComponent(String(limit))}`,
-    accessPassword,
+    identityToken,
   )
   if (!data.ok || !data.tasks) throw new Error(data.message || '查询云端任务列表失败')
   return data.tasks
@@ -184,21 +184,21 @@ export async function listBackgroundTasks(accessPassword: string, limit = 20): P
 export async function retryBackgroundTask(
   taskId: string,
   payload: Pick<GenerateRequest, 'apiKey' | 'baseUrl' | 'timeoutSec' | 'concurrency' | 'model'>,
-  accessPassword: string,
+  identityToken: string,
 ): Promise<BackgroundTask> {
   const data = await postJson<{ ok?: boolean; task?: BackgroundTask; message?: string }>(
     `/api/background-tasks/${encodeURIComponent(taskId)}/retry`,
     payload,
-    accessPassword,
+    identityToken,
   )
   if (!data.ok || !data.task) throw new Error(data.message || '重试后台任务失败')
   return data.task
 }
 
-export async function getBackgroundStats(accessPassword: string): Promise<BackgroundStats> {
+export async function getBackgroundStats(identityToken: string): Promise<BackgroundStats> {
   const data = await getJson<{ ok?: boolean; stats?: BackgroundStats; message?: string }>(
     '/api/stats',
-    accessPassword,
+    identityToken,
   )
   if (!data.ok || !data.stats) throw new Error(data.message || '查询统计失败')
   return data.stats
@@ -231,25 +231,16 @@ export async function generateImagesDirect(
   }
 }
 
-export async function checkWorkerPassword(accessPassword: string): Promise<{ ok: boolean; message: string }> {
-  const response = await fetch('/api/health', {
-    headers: { 'X-Access-Password': accessPassword },
-  })
-  if (response.ok) return { ok: true, message: 'Worker 密码验证通过' }
-  const data = await response.json().catch(() => null) as { message?: string } | null
-  return { ok: false, message: data?.message || `验证失败：HTTP ${response.status}` }
-}
-
 export async function uploadImageToPixhost(
   dataUrl: string,
   fileName: string,
-  accessPassword: string,
+  identityToken: string,
 ): Promise<{ remoteUrl: string; remoteThumbUrl?: string }> {
   const response = await fetch('/api/upload-pixhost', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Access-Password': accessPassword,
+      ...identityHeaders(identityToken),
     },
     body: JSON.stringify({ image: dataUrl, fileName }),
   })
@@ -275,21 +266,26 @@ export function getImageProxyUrl(src: string) {
   return `/api/image-proxy?url=${encodeURIComponent(normalized)}`
 }
 
-async function postJson<T>(url: string, body: unknown, accessPassword: string): Promise<T> {
+function identityHeaders(identityToken?: string): Record<string, string> {
+  const normalized = identityToken?.trim()
+  return normalized ? { 'X-Identity-Token': normalized } : {}
+}
+
+async function postJson<T>(url: string, body: unknown, identityToken?: string): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Access-Password': accessPassword,
+      ...identityHeaders(identityToken),
     },
     body: JSON.stringify(body),
   })
   return parseJsonOrThrow<T>(response)
 }
 
-async function getJson<T>(url: string, accessPassword: string): Promise<T> {
+async function getJson<T>(url: string, identityToken?: string): Promise<T> {
   const response = await fetch(url, {
-    headers: { 'X-Access-Password': accessPassword },
+    headers: identityHeaders(identityToken),
   })
   return parseJsonOrThrow<T>(response)
 }
@@ -299,7 +295,8 @@ async function parseJsonOrThrow<T>(response: Response): Promise<T> {
   if (!response.ok) {
     if (data?.ok === false) {
       const status = data.status || response.status
-      throw new Error(formatHttpError(status, data.message))
+      const shouldMapHttp = data.type === 'upstream_error' || status === 524
+      throw new Error(shouldMapHttp ? formatHttpError(status, data.message) : data.message || formatHttpError(status))
     }
     throw new Error(formatHttpError(response.status, data?.message))
   }
@@ -634,6 +631,7 @@ async function readResponseErrorDetail(response: Response) {
 function formatHttpError(status: number, detail?: string) {
   if (status === 401) return appendErrorDetail('HTTP 401：API Key 错误或额度问题，请检查 Key、账户余额和接口权限', detail)
   if (status === 403) return appendErrorDetail('HTTP 403：无权限访问该接口或模型，模型可能不可用', detail)
+  if (status === 502) return appendErrorDetail('HTTP 502：上游网关错误。4K 生图时 OpenAI 官方链路可能不稳定，出现 502 请重试或切换其他线路', detail)
   if (status === 413) return appendErrorDetail('HTTP 413：图片太大，请压缩图片、减少参考图或降低分辨率后重试', detail)
   if (status === 429) return appendErrorDetail('HTTP 429：请求过多触发限流，请降低并发、减少张数或稍后重试', detail)
   if (status === 524) return formatCloudflare524Error()

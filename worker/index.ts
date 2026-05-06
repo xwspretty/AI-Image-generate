@@ -5,7 +5,6 @@ interface Env {
   ASSETS: Fetcher
   DB?: D1Database
   IMAGE_WORKFLOW?: Workflow<ImageWorkflowParams>
-  ACCESS_PASSWORD?: string
   ALLOW_HTTP_API?: string
   ALLOW_PRIVATE_HOSTS?: string
 }
@@ -78,6 +77,7 @@ interface WorkflowPayload extends Omit<NormalizedPayload, 'inputImages'> {
 interface ImageWorkflowParams {
   taskId: string
   payload: WorkflowPayload
+  ownerHash?: string
 }
 
 interface ResultItem {
@@ -118,6 +118,7 @@ interface PublicTask {
 
 interface TaskRow {
   id: string
+  owner_hash: string | null
   status: string
   mode: Mode
   prompt: string
@@ -190,7 +191,7 @@ function getImageSize(ratio: AspectRatio, resolution: ResolutionTier) {
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Access-Password, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Identity-Token',
 }
 
 const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images'
@@ -208,22 +209,20 @@ export default {
     }
 
     if (url.pathname === '/api/health') {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       return json({ ok: true, message: 'Worker is ready', background: Boolean(env.DB && env.IMAGE_WORKFLOW) })
     }
 
     if (url.pathname === '/api/generate-stream') {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       if (request.method !== 'POST') return jsonError('bad_request', '仅支持 POST 请求', 405)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
       return handleGenerateStream(request, env, ctx)
     }
 
     if (url.pathname === '/api/upload-pixhost') {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       if (request.method !== 'POST') return jsonError('bad_request', '仅支持 POST 请求', 405)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
       return handlePixhostUpload(request)
     }
 
@@ -233,42 +232,42 @@ export default {
     }
 
     if (url.pathname === '/api/stats') {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       if (request.method !== 'GET') return jsonError('bad_request', '仅支持 GET 请求', 405)
-      return handleStats(env)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      return handleStats(env, identity.ownerHash)
     }
 
     if (url.pathname === '/api/background-tasks') {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
-      if (request.method === 'POST') return handleCreateBackgroundTask(request, env)
-      if (request.method === 'GET') return handleListBackgroundTasks(request, env)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      if (request.method === 'POST') return handleCreateBackgroundTask(request, env, identity.ownerHash)
+      if (request.method === 'GET') return handleListBackgroundTasks(request, env, identity.ownerHash)
       return jsonError('bad_request', '仅支持 GET / POST 请求', 405)
     }
 
     const retryMatch = url.pathname.match(/^\/api\/background-tasks\/([^/]+)\/retry$/)
     if (retryMatch) {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       if (request.method !== 'POST') return jsonError('bad_request', '仅支持 POST 请求', 405)
-      return handleRetryBackgroundTask(decodeURIComponent(retryMatch[1]), request, env)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      return handleRetryBackgroundTask(decodeURIComponent(retryMatch[1]), request, env, identity.ownerHash)
     }
 
     const taskImageMatch = url.pathname.match(/^\/api\/background-tasks\/([^/]+)\/images\/(\d+)$/)
     if (taskImageMatch) {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       if (request.method !== 'GET') return jsonError('bad_request', '仅支持 GET 请求', 405)
-      return handleGetTaskImage(decodeURIComponent(taskImageMatch[1]), Number(taskImageMatch[2]), env)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      return handleGetTaskImage(decodeURIComponent(taskImageMatch[1]), Number(taskImageMatch[2]), env, identity.ownerHash)
     }
 
     const taskMatch = url.pathname.match(/^\/api\/background-tasks\/([^/]+)$/)
     if (taskMatch) {
-      const auth = requireAccessPassword(request, env)
-      if (auth) return auth
       if (request.method !== 'GET') return jsonError('bad_request', '仅支持 GET 请求', 405)
-      return handleGetBackgroundTask(decodeURIComponent(taskMatch[1]), env)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      return handleGetBackgroundTask(decodeURIComponent(taskMatch[1]), env, identity.ownerHash)
     }
 
     return env.ASSETS.fetch(request)
@@ -279,11 +278,13 @@ export class ImageWorkflow extends WorkflowEntrypoint<Env, ImageWorkflowParams> 
   async run(event: Readonly<WorkflowEvent<ImageWorkflowParams>>, step: WorkflowStep): Promise<unknown> {
     const { taskId, payload } = event.payload
     const db = requireDb(this.env)
+    let ownerHash = event.payload.ownerHash
     const startedAt = Date.now()
 
     try {
       await step.do('初始化后台任务状态', async () => {
         await ensureSchema(this.env)
+        ownerHash ||= await getTaskOwnerHash(db, taskId)
         await updateTaskStatus(db, taskId, 'running')
         return true
       })
@@ -316,7 +317,7 @@ export class ImageWorkflow extends WorkflowEntrypoint<Env, ImageWorkflowParams> 
       await step.do('写入后台任务完成状态', async () => {
         const completedAt = Date.now()
         await finishTask(db, taskId, status, results, error, completedAt)
-        if (okCount > 0) await incrementGeneratedStats(db, okCount, completedAt)
+        if (okCount > 0) await incrementGeneratedStats(db, okCount, completedAt, ownerHash)
         return { okCount, status }
       })
 
@@ -391,7 +392,7 @@ async function handleImageProxy(request: Request, ctx: ExecutionContext) {
   return proxied
 }
 
-async function handleCreateBackgroundTask(request: Request, env: Env) {
+async function handleCreateBackgroundTask(request: Request, env: Env, ownerHash: string) {
   const bindingError = ensureBackgroundBindings(env)
   if (bindingError) return bindingError
   await ensureSchema(env)
@@ -419,6 +420,7 @@ async function handleCreateBackgroundTask(request: Request, env: Env) {
 
     await insertTask(requireDb(env), {
       id: taskId,
+      ownerHash,
       status: 'queued',
       payload: workflowPayload,
       requestJson,
@@ -427,23 +429,23 @@ async function handleCreateBackgroundTask(request: Request, env: Env) {
 
     await env.IMAGE_WORKFLOW!.create({
       id: taskId,
-      params: { taskId, payload: workflowPayload },
+      params: { taskId, payload: workflowPayload, ownerHash },
       retention: { successRetention: '7 days', errorRetention: '14 days' },
     })
 
-    const task = await getPublicTaskById(requireDb(env), taskId)
+    const task = await getPublicTaskById(requireDb(env), taskId, ownerHash)
     return json({ ok: true, task })
   } catch (error) {
     return jsonError('internal_error', error instanceof Error ? error.message : '创建后台任务失败', 500)
   }
 }
 
-async function handleRetryBackgroundTask(taskId: string, request: Request, env: Env) {
+async function handleRetryBackgroundTask(taskId: string, request: Request, env: Env, ownerHash: string) {
   const bindingError = ensureBackgroundBindings(env)
   if (bindingError) return bindingError
   await ensureSchema(env)
 
-  const row = await getTaskRow(requireDb(env), taskId)
+  const row = await getOwnedTaskRow(requireDb(env), taskId, ownerHash)
   if (!row) return jsonError('bad_request', '后台任务不存在', 404)
 
   let payload: RetryPayload
@@ -482,6 +484,7 @@ async function handleRetryBackgroundTask(taskId: string, request: Request, env: 
 
     await insertTask(requireDb(env), {
       id: retryId,
+      ownerHash,
       status: 'queued',
       payload: workflowPayload,
       requestJson: JSON.stringify({ ...toStoredRequest(workflowPayload), retryOf: taskId }),
@@ -491,34 +494,34 @@ async function handleRetryBackgroundTask(taskId: string, request: Request, env: 
 
     await env.IMAGE_WORKFLOW!.create({
       id: retryId,
-      params: { taskId: retryId, payload: workflowPayload },
+      params: { taskId: retryId, payload: workflowPayload, ownerHash },
       retention: { successRetention: '7 days', errorRetention: '14 days' },
     })
 
-    const task = await getPublicTaskById(requireDb(env), retryId)
+    const task = await getPublicTaskById(requireDb(env), retryId, ownerHash)
     return json({ ok: true, task })
   } catch (error) {
     return jsonError('internal_error', error instanceof Error ? error.message : '创建重试任务失败', 500)
   }
 }
 
-async function handleGetBackgroundTask(taskId: string, env: Env) {
+async function handleGetBackgroundTask(taskId: string, env: Env, ownerHash: string) {
   const bindingError = ensureDbBinding(env)
   if (bindingError) return bindingError
   await ensureSchema(env)
-  const task = await getPublicTaskById(requireDb(env), taskId)
+  const task = await getPublicTaskById(requireDb(env), taskId, ownerHash)
   if (!task) return jsonError('bad_request', '后台任务不存在', 404)
   return json({ ok: true, task })
 }
 
-async function handleGetTaskImage(taskId: string, index: number, env: Env) {
+async function handleGetTaskImage(taskId: string, index: number, env: Env, ownerHash: string) {
   const bindingError = ensureDbBinding(env)
   if (bindingError) return bindingError
   await ensureSchema(env)
   if (!Number.isInteger(index) || index < 0) return jsonError('bad_request', '图片序号无效', 400)
 
   const db = requireDb(env)
-  const task = await getTaskRow(db, taskId)
+  const task = await getOwnedTaskRow(db, taskId, ownerHash)
   if (!task) return jsonError('bad_request', '后台任务不存在', 404)
 
   const first = await db.prepare(
@@ -550,28 +553,28 @@ async function handleGetTaskImage(taskId: string, index: number, env: Env) {
   })
 }
 
-async function handleListBackgroundTasks(request: Request, env: Env) {
+async function handleListBackgroundTasks(request: Request, env: Env, ownerHash: string) {
   const bindingError = ensureDbBinding(env)
   if (bindingError) return bindingError
   await ensureSchema(env)
   const url = new URL(request.url)
   const limit = clamp(Number(url.searchParams.get('limit') || 20), 1, 100, 20)
   const rows = await requireDb(env)
-    .prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?')
-    .bind(limit)
+    .prepare('SELECT * FROM tasks WHERE owner_hash = ? ORDER BY created_at DESC LIMIT ?')
+    .bind(ownerHash, limit)
     .all<TaskRow>()
   return json({ ok: true, tasks: (rows.results || []).map(taskFromRow) })
 }
 
-async function handleStats(env: Env) {
+async function handleStats(env: Env, ownerHash: string) {
   const bindingError = ensureDbBinding(env)
   if (bindingError) return bindingError
   await ensureSchema(env)
   const db = requireDb(env)
   const today = getBeijingDateKey(Date.now())
   const [todayGenerated, totalGenerated] = await Promise.all([
-    getStatValue(db, `daily_${today}`),
-    getStatValue(db, 'total_generated'),
+    getStatValue(db, ownerStatKey(ownerHash, `daily_${today}`)),
+    getStatValue(db, ownerStatKey(ownerHash, 'total_generated')),
   ])
   return json({ ok: true, stats: { today, todayGenerated, totalGenerated } })
 }
@@ -635,17 +638,26 @@ async function streamGenerate(writer: WritableStreamDefaultWriter<Uint8Array>, d
   }
 }
 
-function requireAccessPassword(request: Request, env: Env): Response | null {
-  const expected = (env.ACCESS_PASSWORD || '').trim()
-  if (!expected || expected === 'change-me') {
-    return jsonError('invalid_config', 'Worker 访问密码尚未配置，请先修改 ACCESS_PASSWORD', 503)
+async function requireOwnerHash(request: Request): Promise<{ ownerHash: string; response?: undefined } | { ownerHash?: undefined; response: Response }> {
+  const token = normalizeIdentityToken(request.headers.get('X-Identity-Token') || '')
+  if (token.length < 10) {
+    return { response: jsonError('auth_error', '请先输入至少 10 位身份令牌', 401) }
   }
+  return { ownerHash: await hashIdentityToken(token) }
+}
 
-  const header = request.headers.get('X-Access-Password')?.trim()
-  const bearer = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '').trim()
-  const provided = header || bearer || ''
-  if (provided !== expected) return jsonError('auth_error', 'Worker 访问密码错误或缺失', 401)
-  return null
+function normalizeIdentityToken(value: string) {
+  return value.trim()
+}
+
+async function hashIdentityToken(token: string) {
+  const bytes = new TextEncoder().encode(`ai-image-generate-owner:v1:${token}`)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return bytesToHex(new Uint8Array(digest))
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function normalizePayload(payload: GeneratePayload, env: Env): NormalizedPayload {
@@ -960,6 +972,7 @@ function formatFetchError(message: string) {
 function formatHttpError(status: number, detail?: string) {
   if (status === 401) return appendErrorDetail('HTTP 401：API Key 错误或额度问题，请检查 Key、账户余额和接口权限', detail)
   if (status === 403) return appendErrorDetail('HTTP 403：无权限访问该接口或模型，模型可能不可用', detail)
+  if (status === 502) return appendErrorDetail('HTTP 502：上游网关错误。4K 生图时 OpenAI 官方链路可能不稳定，出现 502 请重试或切换其他线路', detail)
   if (status === 413) return appendErrorDetail('HTTP 413：图片太大，请压缩图片、减少参考图或降低分辨率后重试', detail)
   if (status === 429) return appendErrorDetail('HTTP 429：请求过多触发限流，请降低并发、减少张数或稍后重试', detail)
   if (status === 524) return formatCloudflare524Error()
@@ -1080,6 +1093,7 @@ async function setupSchema(db: D1Database) {
   const statements = [
     `CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
+      owner_hash TEXT,
       status TEXT NOT NULL,
       mode TEXT NOT NULL,
       prompt TEXT NOT NULL,
@@ -1119,10 +1133,20 @@ async function setupSchema(db: D1Database) {
     'CREATE INDEX IF NOT EXISTS idx_task_image_chunks_created_at ON task_image_chunks(created_at)',
   ]
   for (const statement of statements) await db.prepare(statement).run()
+  await ensureColumn(db, 'tasks', 'owner_hash', 'TEXT')
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tasks_owner_created_at ON tasks(owner_hash, created_at DESC)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tasks_owner_status ON tasks(owner_hash, status)').run()
+}
+
+async function ensureColumn(db: D1Database, table: string, column: string, definition: string) {
+  const rows = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>()
+  if ((rows.results || []).some((row) => row.name === column)) return
+  await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run()
 }
 
 async function insertTask(db: D1Database, options: {
   id: string
+  ownerHash: string
   status: BackgroundTaskStatus
   payload: WorkflowPayload
   requestJson: string
@@ -1130,10 +1154,11 @@ async function insertTask(db: D1Database, options: {
   retryOf?: string
 }) {
   await db.prepare(`INSERT INTO tasks (
-    id, status, mode, prompt, ratio, resolution, size, model, count, concurrency,
+    id, owner_hash, status, mode, prompt, ratio, resolution, size, model, count, concurrency,
     request_json, results_json, workflow_id, retry_of, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`).bind(
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)`).bind(
     options.id,
+    options.ownerHash,
     options.status,
     options.payload.mode,
     options.payload.prompt,
@@ -1207,8 +1232,17 @@ async function getTaskRow(db: D1Database, taskId: string) {
   return db.prepare('SELECT * FROM tasks WHERE id = ?').bind(taskId).first<TaskRow>()
 }
 
-async function getPublicTaskById(db: D1Database, taskId: string) {
-  const row = await getTaskRow(db, taskId)
+async function getOwnedTaskRow(db: D1Database, taskId: string, ownerHash: string) {
+  return db.prepare('SELECT * FROM tasks WHERE id = ? AND owner_hash = ?').bind(taskId, ownerHash).first<TaskRow>()
+}
+
+async function getTaskOwnerHash(db: D1Database, taskId: string) {
+  const row = await db.prepare('SELECT owner_hash FROM tasks WHERE id = ?').bind(taskId).first<{ owner_hash: string | null }>()
+  return row?.owner_hash || undefined
+}
+
+async function getPublicTaskById(db: D1Database, taskId: string, ownerHash: string) {
+  const row = await getOwnedTaskRow(db, taskId, ownerHash)
   return row ? taskFromRow(row) : null
 }
 
@@ -1285,9 +1319,16 @@ function safeJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T } catch { return fallback }
 }
 
-async function incrementGeneratedStats(db: D1Database, count: number, now: number) {
+async function incrementGeneratedStats(db: D1Database, count: number, now: number, ownerHash?: string) {
   const today = getBeijingDateKey(now)
-  await Promise.all([incrementStat(db, 'total_generated', count, now), incrementStat(db, `daily_${today}`, count, now)])
+  const keys = ownerHash
+    ? [ownerStatKey(ownerHash, 'total_generated'), ownerStatKey(ownerHash, `daily_${today}`)]
+    : ['total_generated', `daily_${today}`]
+  await Promise.all(keys.map((key) => incrementStat(db, key, count, now)))
+}
+
+function ownerStatKey(ownerHash: string, key: string) {
+  return `owner_${ownerHash}_${key}`
 }
 
 async function incrementStat(db: D1Database, key: string, value: number, now: number) {
