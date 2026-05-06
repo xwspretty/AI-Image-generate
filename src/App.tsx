@@ -721,23 +721,33 @@ export default function App() {
             <div className="brand-mark">AI</div>
             <div>
               <h1>AI Image Generate</h1>
-              <p>请输入身份令牌后进入工作台</p>
+              <p>请输入你自己设置的空间密码后进入工作台</p>
             </div>
+          </div>
+          <div className="identity-help">
+            <strong>空间密码说明</strong>
+            <ul>
+              <li>这个密码由你自行设置，不需要注册，也没有默认密码。</li>
+              <li>建议使用复杂密码，至少 {IDENTITY_TOKEN_MIN_LENGTH} 位，最好包含大小写字母、数字和符号。</li>
+              <li>输入完全相同的密码，会进入同一个云端任务空间；换一台设备输入相同密码，也能同步同一批任务。</li>
+              <li>输入不同密码，会进入不同空间，任务互相隔离。</li>
+              <li>请自己保存好这个密码；忘记后无法找回原空间。</li>
+            </ul>
           </div>
           <form className="identity-form" onSubmit={handleIdentitySubmit}>
             <label className="field full">
-              <span>身份令牌</span>
+              <span>空间密码</span>
               <input
                 type="password"
                 value={identityDraft}
-                placeholder={`自定义至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，例如 my-space-2026`}
+                placeholder={`自行设置复杂密码，至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位`}
                 autoComplete="off"
                 autoFocus
                 onChange={(e) => setIdentityDraft(e.target.value)}
               />
-              <small>输入相同身份令牌会进入同一个云端任务空间；不同令牌之间任务互相隔离。</small>
+              <small>只有输入完全相同的空间密码，才会进入同一个云端任务空间。</small>
             </label>
-            <button type="submit" className="primary-btn">进入</button>
+            <button type="submit" className="primary-btn">进入这个空间</button>
           </form>
           {message ? (
             <div className={`identity-message ${message.type}`}>

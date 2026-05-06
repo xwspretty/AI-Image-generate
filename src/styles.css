@@ -519,6 +519,19 @@ code { font-size: .85em; }
 }
 .identity-brand { margin-bottom: 22px; }
 .identity-brand h1 { font-size: 22px; }
+.identity-help {
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 13px 14px;
+  margin-bottom: 18px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.identity-help strong { display: block; margin-bottom: 6px; color: #1e40af; }
+.identity-help ul { margin: 0; padding-left: 18px; }
+.identity-help li + li { margin-top: 3px; }
 .identity-form { display: flex; flex-direction: column; gap: 16px; }
 .identity-form .primary-btn { width: 100%; padding: 13px 16px; }
 .identity-message {

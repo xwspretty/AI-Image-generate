@@ -44,7 +44,7 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
         <header className="modal-header">
           <div>
             <h2>设置</h2>
-            <p>API Key / URL / 身份令牌只保存在你的浏览器里。</p>
+            <p>API Key / URL / 空间密码只保存在你的浏览器里。</p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose}>×</button>
         </header>
@@ -103,16 +103,16 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
           </label>
 
           <label className="field full">
-            <span>身份令牌</span>
+            <span>空间密码</span>
             <input
               type={showSecrets ? 'text' : 'password'}
               value={draft.identityToken}
-              placeholder={`自定义至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，相同令牌共享云端任务`}
+              placeholder={`自行设置复杂密码，至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位`}
               autoComplete="off"
               onChange={(e) => setDraft({ ...draft, identityToken: e.target.value })}
             />
             <small>
-              当前：{maskSecret(draft.identityToken)}。同步云端任务只会返回这个身份令牌下的任务。
+              当前：{maskSecret(draft.identityToken)}。输入完全相同的空间密码会进入同一个云端任务空间；不同密码任务互相隔离。
             </small>
           </label>
 
