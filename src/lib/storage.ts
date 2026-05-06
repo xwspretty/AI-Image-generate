@@ -6,6 +6,7 @@ const SESSION_SETTINGS_KEY = 'ai-image-generate:session-settings:v1'
 const ACTIVE_BACKGROUND_TASKS_KEY = 'ai-image-generate:active-background-tasks:v1'
 const SCOPED_ACTIVE_BACKGROUND_TASKS_KEY = 'ai-image-generate:active-background-tasks:v2'
 export const IDENTITY_TOKEN_MIN_LENGTH = 10
+const DERIVED_IDENTITY_TOKEN_RE = /^[a-f0-9]{64}$/i
 
 export const DEFAULT_SETTINGS: AppSettings = {
   requestMode: 'worker',
@@ -37,7 +38,7 @@ function normalizeResolution(value: unknown): ResolutionTier {
 function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
   const defaultResolution = normalizeResolution(raw.defaultResolution)
   const defaultRatio = normalizeRatioForResolution(normalizeRatio(raw.defaultRatio), defaultResolution)
-  const identityToken = typeof raw.identityToken === 'string' ? raw.identityToken.trim() : DEFAULT_SETTINGS.identityToken
+  const identityToken = normalizeIdentityToken(raw.identityToken)
   return {
     ...DEFAULT_SETTINGS,
     ...raw,
@@ -63,11 +64,23 @@ export function loadSettings(): AppSettings {
   if (typeof window === 'undefined') return DEFAULT_SETTINGS
   try {
     const session = sessionStorage.getItem(SESSION_SETTINGS_KEY)
-    if (session) return sanitizeSettings(JSON.parse(session))
+    if (session) {
+      const parsed = JSON.parse(session) as Partial<AppSettings>
+      const sanitized = sanitizeSettings(parsed)
+      if (typeof parsed.identityToken === 'string' && parsed.identityToken && parsed.identityToken !== sanitized.identityToken) {
+        sessionStorage.setItem(SESSION_SETTINGS_KEY, JSON.stringify(sanitized))
+      }
+      return sanitized
+    }
 
     const saved = localStorage.getItem(SETTINGS_KEY)
     if (!saved) return DEFAULT_SETTINGS
-    return sanitizeSettings(JSON.parse(saved))
+    const parsed = JSON.parse(saved) as Partial<AppSettings>
+    const sanitized = sanitizeSettings(parsed)
+    if (typeof parsed.identityToken === 'string' && parsed.identityToken && parsed.identityToken !== sanitized.identityToken) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(sanitized))
+    }
+    return sanitized
   } catch {
     return DEFAULT_SETTINGS
   }
@@ -96,11 +109,115 @@ export interface ActiveBackgroundTask {
 }
 
 export function normalizeIdentityToken(value: unknown) {
-  return typeof value === 'string' ? value.trim() : ''
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return DERIVED_IDENTITY_TOKEN_RE.test(normalized) ? normalized : ''
 }
 
 export function isValidIdentityToken(value: unknown) {
-  return normalizeIdentityToken(value).length >= IDENTITY_TOKEN_MIN_LENGTH
+  return Boolean(normalizeIdentityToken(value))
+}
+
+export function validateSpacePassword(value: unknown): { ok: boolean; message?: string } {
+  const password = typeof value === 'string' ? value.trim() : ''
+  if (password.length < IDENTITY_TOKEN_MIN_LENGTH) {
+    return { ok: false, message: `空间密码至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位` }
+  }
+
+  const compact = password.replace(/\s+/g, '')
+  const lower = compact.toLowerCase()
+  if (!compact) return { ok: false, message: '空间密码不能只包含空格' }
+  if (/^(.)\1+$/.test(compact)) return { ok: false, message: '空间密码过于简单：不能使用同一个字符重复' }
+  if (/(.)\1{5,}/.test(compact)) return { ok: false, message: '空间密码过于简单：不能包含大量连续重复字符' }
+  if (isSequential(lower)) return { ok: false, message: '空间密码过于简单：不能使用连续数字或连续字母' }
+  if (hasRepeatedPattern(lower)) return { ok: false, message: '空间密码过于简单：不能使用重复片段' }
+  if (containsKeyboardSequence(lower)) return { ok: false, message: '空间密码过于简单：不能使用键盘顺序' }
+  if (containsWeakWord(lower)) return { ok: false, message: '空间密码过于简单：不能使用常见弱密码词' }
+  if (isDateLike(lower)) return { ok: false, message: '空间密码过于简单：不能使用明显日期或年份重复' }
+
+  const categories = [
+    /[a-z]/.test(password),
+    /[A-Z]/.test(password),
+    /\d/.test(password),
+    /[^a-zA-Z0-9]/.test(password),
+  ].filter(Boolean).length
+  if (categories < 3) {
+    return { ok: false, message: '空间密码过于简单：建议同时包含大小写字母、数字和符号中的至少三类' }
+  }
+
+  return { ok: true }
+}
+
+export async function deriveIdentityTokenFromPassword(password: string) {
+  const normalized = password.trim()
+  const validation = validateSpacePassword(normalized)
+  if (!validation.ok) throw new Error(validation.message || '空间密码过于简单')
+  const bytes = new TextEncoder().encode(`ai-image-generate-owner:v1:${normalized}`)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return bytesToHex(new Uint8Array(digest))
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function isSequential(value: string) {
+  if (value.length < IDENTITY_TOKEN_MIN_LENGTH) return false
+  const digits = '012345678901234567890'
+  const reverseDigits = '098765432109876543210'
+  const letters = 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz'
+  const reverseLetters = 'zyxwvutsrqponmlkjihgfedcbazyxwvutsrqponmlkjihgfedcba'
+  return digits.includes(value) || reverseDigits.includes(value) || letters.includes(value) || reverseLetters.includes(value)
+}
+
+function hasRepeatedPattern(value: string) {
+  for (let size = 1; size <= Math.floor(value.length / 2); size += 1) {
+    if (value.length % size !== 0) continue
+    const part = value.slice(0, size)
+    if (part.repeat(value.length / size) === value) return true
+  }
+  return false
+}
+
+function containsKeyboardSequence(value: string) {
+  const keyboardRows = [
+    'qwertyuiop',
+    'poiuytrewq',
+    'asdfghjkl',
+    'lkjhgfdsa',
+    'zxcvbnm',
+    'mnbvcxz',
+    '1qaz2wsx3edc4rfv5tgb',
+    '0okm9ijn8uhb7ygv6tfc',
+  ]
+  return keyboardRows.some((row) => value.includes(row.slice(0, Math.min(row.length, Math.max(6, value.length)))))
+    || ['qwerty', 'asdfgh', 'zxcvbn', '1qaz2wsx', 'qwerty123', 'qwertyuiop'].some((item) => value.includes(item))
+}
+
+function containsWeakWord(value: string) {
+  const normalized = value.replace(/[^a-z0-9]/g, '')
+  const weakWords = [
+    'password',
+    'admin',
+    'administrator',
+    'letmein',
+    'welcome',
+    'iloveyou',
+    'qwerty',
+    'testtest',
+    'aiimage',
+    'aigenerate',
+    'imagegenerate',
+    'cloudtask',
+    'myspace',
+  ]
+  return weakWords.some((word) => normalized.includes(word))
+}
+
+function isDateLike(value: string) {
+  if (!/^\d+$/.test(value)) return false
+  if (/^(19|20)\d{2}\1/.test(value)) return true
+  if (/^(19|20)\d{2}$/.test(value.slice(0, 4)) && hasRepeatedPattern(value)) return true
+  return /^(19|20)\d{6,}$/.test(value)
 }
 
 function identityStorageSuffix(identityToken: string) {

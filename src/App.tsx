@@ -12,6 +12,7 @@ import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioFor
 import {
   addActiveBackgroundTask,
   DEFAULT_SETTINGS,
+  deriveIdentityTokenFromPassword,
   IDENTITY_TOKEN_MIN_LENGTH,
   isValidIdentityToken,
   loadActiveBackgroundTasks,
@@ -19,6 +20,7 @@ import {
   normalizeIdentityToken,
   removeActiveBackgroundTask,
   saveSettings,
+  validateSpacePassword,
 } from './lib/storage'
 import './styles.css'
 
@@ -161,7 +163,7 @@ export default function App() {
       uploadCacheRef.current.clear()
       setTasks([])
       setBackgroundStats(null)
-      setIdentityDraft(normalized.identityToken)
+      setIdentityDraft('')
     }
     setSettings(normalized)
     saveSettings(normalized)
@@ -338,7 +340,7 @@ export default function App() {
   async function syncCloudTasks() {
     const identityToken = normalizeIdentityToken(settings.identityToken)
     if (!isValidIdentityToken(identityToken)) {
-      showMessage(`请先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`, 'error')
+      showMessage(`请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`, 'error')
       return
     }
     setSyncingCloudTasks(true)
@@ -354,7 +356,7 @@ export default function App() {
   }
 
   function validateBeforeGenerate() {
-    if (!isValidIdentityToken(settings.identityToken)) return `请先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`
+    if (!isValidIdentityToken(settings.identityToken)) return `请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`
     if (!settings.baseUrl.trim()) return '请先填写 API URL'
     if (!settings.apiKey.trim()) return '请先填写 API Key'
     if (!settings.model.trim()) return '请先填写模型名称'
@@ -582,7 +584,7 @@ export default function App() {
   function handleUploadImage(taskId: string, result: GenerateResultItem) {
     const identityToken = normalizeIdentityToken(settings.identityToken)
     if (!isValidIdentityToken(identityToken)) {
-      showMessage(`上传图床需要先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`, 'error')
+      showMessage(`上传图床需要先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`, 'error')
       return
     }
     if (result.uploading) return
@@ -596,7 +598,7 @@ export default function App() {
   async function handleRetryBackgroundTask(taskId: string) {
     const identityToken = normalizeIdentityToken(settings.identityToken)
     if (!isValidIdentityToken(identityToken)) {
-      showMessage(`重试后台任务需要先输入至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位身份令牌`, 'error')
+      showMessage(`重试后台任务需要先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`, 'error')
       return
     }
     if (!settings.apiKey.trim()) {
@@ -702,15 +704,21 @@ export default function App() {
   const size = getImageSize(ratio, resolution)
   const identityReady = isValidIdentityToken(settings.identityToken)
 
-  function handleIdentitySubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleIdentitySubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const token = normalizeIdentityToken(identityDraft)
-    if (!isValidIdentityToken(token)) {
-      showMessage(`身份令牌至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位`, 'error')
+    const password = identityDraft.trim()
+    const validation = validateSpacePassword(password)
+    if (!validation.ok) {
+      showMessage(validation.message || `空间密码至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位`, 'error')
       return
     }
-    updateSettings({ ...settings, identityToken: token })
-    showMessage('身份令牌已启用，同令牌会同步同一个云端任务空间', 'ok')
+    try {
+      const identityToken = await deriveIdentityTokenFromPassword(password)
+      updateSettings({ ...settings, identityToken })
+      showMessage('空间密码已启用，相同密码会同步同一个云端任务空间', 'ok')
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : '空间密码处理失败', 'error')
+    }
   }
 
   if (!identityReady) {
@@ -731,6 +739,7 @@ export default function App() {
               <li>建议使用复杂密码，至少 {IDENTITY_TOKEN_MIN_LENGTH} 位，最好包含大小写字母、数字和符号。</li>
               <li>输入完全相同的密码，会进入同一个云端任务空间；换一台设备输入相同密码，也能同步同一批任务。</li>
               <li>输入不同密码，会进入不同空间，任务互相隔离。</li>
+              <li>浏览器和云端只保存不可逆算法处理后的结果，不保存明文密码。</li>
               <li>请自己保存好这个密码；忘记后无法找回原空间。</li>
             </ul>
           </div>

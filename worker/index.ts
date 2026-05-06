@@ -197,6 +197,8 @@ const CORS_HEADERS = {
 const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images'
 const PIXHOST_MAX_BYTES = 10 * 1024 * 1024
 const PIXHOST_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif'])
+const IDENTITY_TOKEN_MIN_LENGTH = 10
+const DERIVED_OWNER_HASH_RE = /^[a-f0-9]{64}$/i
 
 let schemaReady: Promise<void> | null = null
 
@@ -640,14 +642,106 @@ async function streamGenerate(writer: WritableStreamDefaultWriter<Uint8Array>, d
 
 async function requireOwnerHash(request: Request): Promise<{ ownerHash: string; response?: undefined } | { ownerHash?: undefined; response: Response }> {
   const token = normalizeIdentityToken(request.headers.get('X-Identity-Token') || '')
-  if (token.length < 10) {
-    return { response: jsonError('auth_error', '请先输入至少 10 位身份令牌', 401) }
+  if (DERIVED_OWNER_HASH_RE.test(token)) {
+    return { ownerHash: token.toLowerCase() }
   }
+  const validation = validateSpacePassword(token)
+  if (!validation.ok) return { response: jsonError('auth_error', validation.message || '空间密码过于简单', 401) }
   return { ownerHash: await hashIdentityToken(token) }
 }
 
 function normalizeIdentityToken(value: string) {
   return value.trim()
+}
+
+function validateSpacePassword(value: string): { ok: boolean; message?: string } {
+  const password = value.trim()
+  if (password.length < IDENTITY_TOKEN_MIN_LENGTH) {
+    return { ok: false, message: `空间密码至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位` }
+  }
+
+  const compact = password.replace(/\s+/g, '')
+  const lower = compact.toLowerCase()
+  if (!compact) return { ok: false, message: '空间密码不能只包含空格' }
+  if (/^(.)\1+$/.test(compact)) return { ok: false, message: '空间密码过于简单：不能使用同一个字符重复' }
+  if (/(.)\1{5,}/.test(compact)) return { ok: false, message: '空间密码过于简单：不能包含大量连续重复字符' }
+  if (isSequential(lower)) return { ok: false, message: '空间密码过于简单：不能使用连续数字或连续字母' }
+  if (hasRepeatedPattern(lower)) return { ok: false, message: '空间密码过于简单：不能使用重复片段' }
+  if (containsKeyboardSequence(lower)) return { ok: false, message: '空间密码过于简单：不能使用键盘顺序' }
+  if (containsWeakWord(lower)) return { ok: false, message: '空间密码过于简单：不能使用常见弱密码词' }
+  if (isDateLike(lower)) return { ok: false, message: '空间密码过于简单：不能使用明显日期或年份重复' }
+
+  const categories = [
+    /[a-z]/.test(password),
+    /[A-Z]/.test(password),
+    /\d/.test(password),
+    /[^a-zA-Z0-9]/.test(password),
+  ].filter(Boolean).length
+  if (categories < 3) {
+    return { ok: false, message: '空间密码过于简单：建议同时包含大小写字母、数字和符号中的至少三类' }
+  }
+
+  return { ok: true }
+}
+
+function isSequential(value: string) {
+  if (value.length < IDENTITY_TOKEN_MIN_LENGTH) return false
+  const digits = '012345678901234567890'
+  const reverseDigits = '098765432109876543210'
+  const letters = 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz'
+  const reverseLetters = 'zyxwvutsrqponmlkjihgfedcbazyxwvutsrqponmlkjihgfedcba'
+  return digits.includes(value) || reverseDigits.includes(value) || letters.includes(value) || reverseLetters.includes(value)
+}
+
+function hasRepeatedPattern(value: string) {
+  for (let size = 1; size <= Math.floor(value.length / 2); size += 1) {
+    if (value.length % size !== 0) continue
+    const part = value.slice(0, size)
+    if (part.repeat(value.length / size) === value) return true
+  }
+  return false
+}
+
+function containsKeyboardSequence(value: string) {
+  const keyboardRows = [
+    'qwertyuiop',
+    'poiuytrewq',
+    'asdfghjkl',
+    'lkjhgfdsa',
+    'zxcvbnm',
+    'mnbvcxz',
+    '1qaz2wsx3edc4rfv5tgb',
+    '0okm9ijn8uhb7ygv6tfc',
+  ]
+  return keyboardRows.some((row) => value.includes(row.slice(0, Math.min(row.length, Math.max(6, value.length)))))
+    || ['qwerty', 'asdfgh', 'zxcvbn', '1qaz2wsx', 'qwerty123', 'qwertyuiop'].some((item) => value.includes(item))
+}
+
+function containsWeakWord(value: string) {
+  const normalized = value.replace(/[^a-z0-9]/g, '')
+  const weakWords = [
+    'password',
+    'admin',
+    'administrator',
+    'letmein',
+    'welcome',
+    'iloveyou',
+    'qwerty',
+    'testtest',
+    'aiimage',
+    'aigenerate',
+    'imagegenerate',
+    'cloudtask',
+    'myspace',
+  ]
+  return weakWords.some((word) => normalized.includes(word))
+}
+
+function isDateLike(value: string) {
+  if (!/^\d+$/.test(value)) return false
+  if (/^(19|20)\d{2}\1/.test(value)) return true
+  if (/^(19|20)\d{2}$/.test(value.slice(0, 4)) && hasRepeatedPattern(value)) return true
+  return /^(19|20)\d{6,}$/.test(value)
 }
 
 async function hashIdentityToken(token: string) {

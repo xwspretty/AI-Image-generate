@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppSettings } from '../types'
-import { clearSettings, IDENTITY_TOKEN_MIN_LENGTH, isValidIdentityToken, maskSecret, normalizeIdentityToken } from '../lib/storage'
+import { clearSettings, deriveIdentityTokenFromPassword, IDENTITY_TOKEN_MIN_LENGTH, isValidIdentityToken, maskSecret, normalizeIdentityToken, validateSpacePassword } from '../lib/storage'
 
 interface Props {
   open: boolean
@@ -12,18 +12,36 @@ interface Props {
 
 export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Props) {
   const [draft, setDraft] = useState(settings)
+  const [spacePasswordDraft, setSpacePasswordDraft] = useState('')
   const [showSecrets, setShowSecrets] = useState(false)
 
   useEffect(() => {
-    if (open) setDraft(settings)
+    if (open) {
+      setDraft(settings)
+      setSpacePasswordDraft('')
+    }
   }, [open, settings])
 
   if (!open) return null
 
-  function save() {
-    const identityToken = normalizeIdentityToken(draft.identityToken)
+  async function save() {
+    let identityToken = normalizeIdentityToken(draft.identityToken)
+    const nextPassword = spacePasswordDraft.trim()
+    if (nextPassword) {
+      const validation = validateSpacePassword(nextPassword)
+      if (!validation.ok) {
+        onMessage(validation.message || `空间密码至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位`, 'error')
+        return
+      }
+      try {
+        identityToken = await deriveIdentityTokenFromPassword(nextPassword)
+      } catch (error) {
+        onMessage(error instanceof Error ? error.message : '空间密码处理失败', 'error')
+        return
+      }
+    }
     if (!isValidIdentityToken(identityToken)) {
-      onMessage(`身份令牌至少需要 ${IDENTITY_TOKEN_MIN_LENGTH} 位`, 'error')
+      onMessage(`请设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位的复杂空间密码`, 'error')
       return
     }
     onSave({ ...draft, identityToken })
@@ -44,7 +62,7 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
         <header className="modal-header">
           <div>
             <h2>设置</h2>
-            <p>API Key / URL / 空间密码只保存在你的浏览器里。</p>
+            <p>API Key / URL 保存在浏览器里；空间密码只保存不可逆派生结果。</p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose}>×</button>
         </header>
@@ -106,13 +124,13 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
             <span>空间密码</span>
             <input
               type={showSecrets ? 'text' : 'password'}
-              value={draft.identityToken}
-              placeholder={`自行设置复杂密码，至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位`}
-              autoComplete="off"
-              onChange={(e) => setDraft({ ...draft, identityToken: e.target.value })}
+              value={spacePasswordDraft}
+              placeholder={`留空不修改；新密码至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，并包含多种字符`}
+              autoComplete="new-password"
+              onChange={(e) => setSpacePasswordDraft(e.target.value)}
             />
             <small>
-              当前：{maskSecret(draft.identityToken)}。输入完全相同的空间密码会进入同一个云端任务空间；不同密码任务互相隔离。
+              当前：{isValidIdentityToken(draft.identityToken) ? '已用不可逆算法保存' : '未设置'}。输入完全相同的空间密码会进入同一个云端任务空间；不同密码任务互相隔离。
             </small>
           </label>
 
