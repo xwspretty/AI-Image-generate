@@ -8,15 +8,15 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "worker:dev": "npm run build && wrangler dev",
-    "worker:deploy": "npm run build && wrangler deploy",
+    "worker:deploy": "npm run build && wrangler deploy --keep-vars",
     "check": "tsc -b"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.4.1",
-    "vite": "^6.3.2",
-    "typescript": "^5.8.3",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260430.0",

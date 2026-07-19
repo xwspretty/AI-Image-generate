@@ -174,6 +174,26 @@ code { font-size: .85em; color: #3f3f46; }
   border-color: rgba(228, 228, 231, .7);
   box-shadow: 0 1px 2px rgba(24,24,27,.04);
 }
+.request-mode-tabs button:disabled {
+  cursor: not-allowed;
+  color: #a1a1aa;
+  background: transparent;
+  opacity: .62;
+}
+.mode-help {
+  display: grid;
+  gap: 5px;
+  margin-top: 2px;
+}
+.mode-help p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.mode-help strong {
+  color: #3f3f46;
+}
 .prompt-input, .prompt-mini-input, .built-prompt-output, .text-input, .field input, .field textarea, .settings-modal input, .settings-modal select {
   width: 100%;
   border: 1px solid var(--border);
@@ -715,5 +735,3 @@ code { font-size: .85em; color: #3f3f46; }
   .card-toolbar button:last-child { background: var(--surface-soft); border: 1px solid var(--border); }
   .card-meta { display: block; padding: 8px 9px 0; color: #71717a; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
-
-

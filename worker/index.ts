@@ -11,6 +11,7 @@ interface Env {
   SW_SITE_ACCESS_PASSWORD?: string
   SW_UPSTREAM_API_KEY?: string
   SW_UPSTREAM_BASE_URL?: string
+  SW_MANAGED_API_ENABLED?: string
   SW_IMAGE_MODEL?: string
   SW_PROMPT_MODEL?: string
 }
@@ -626,12 +627,26 @@ function handleRuntimeConfig(env: Env) {
   const apiKeyConfigured = Boolean(getConfiguredApiKey(env))
   return json({
     ok: true,
-    managedApi: baseUrlConfigured && apiKeyConfigured,
+    managedApi: isManagedApiEnabled(env),
     baseUrlConfigured,
     apiKeyConfigured,
     imageModel,
     promptModel,
   })
+}
+
+function isManagedApiEnabled(env: Env) {
+  const explicit = parseOptionalBoolean(env.SW_MANAGED_API_ENABLED)
+  const configured = Boolean(getConfiguredBaseUrl(env)) && Boolean(getConfiguredApiKey(env))
+  return explicit === undefined ? configured : explicit && configured
+}
+
+function parseOptionalBoolean(value: unknown) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (!normalized) return undefined
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) return false
+  return undefined
 }
 
 function getConfiguredBaseUrl(env: Env) {
@@ -651,11 +666,11 @@ function getConfiguredPromptModel(env: Env) {
 }
 
 function getUpstreamBaseUrl(payloadValue: unknown, env: Env) {
-  return normalizeBaseUrl(String(payloadValue || getConfiguredBaseUrl(env) || '').trim(), env)
+  return normalizeBaseUrl(String(payloadValue || (isManagedApiEnabled(env) ? getConfiguredBaseUrl(env) : '') || '').trim(), env)
 }
 
 function getUpstreamApiKey(payloadValue: unknown, env: Env) {
-  return String(payloadValue || getConfiguredApiKey(env) || '').trim()
+  return String(payloadValue || (isManagedApiEnabled(env) ? getConfiguredApiKey(env) : '') || '').trim()
 }
 async function handleStats(env: Env, ownerHash: string) {
   const bindingError = ensureDbBinding(env)

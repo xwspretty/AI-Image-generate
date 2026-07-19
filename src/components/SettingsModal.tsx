@@ -144,9 +144,19 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage, runt
             <div className="request-mode-tabs">
               <button type="button" className={draft.requestMode === 'worker' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'worker' }))}>Worker 流式代理</button>
               <button type="button" className={draft.requestMode === 'background' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'background' }))}>Worker 后台任务</button>
-              {!managedApi ? <button type="button" className={draft.requestMode === 'direct' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'direct' }))}>浏览器直连</button> : null}
+              <button
+                type="button"
+                className={draft.requestMode === 'direct' ? 'active' : ''}
+                disabled={managedApi}
+                onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'direct' }))}
+                title={managedApi ? '服务端托管 API Key 时不可使用浏览器直连' : undefined}
+              >浏览器直连</button>
             </div>
-            <small>{managedApi ? '服务端已托管 API Key，仅使用 Worker 流式代理或后台任务。' : '流式代理可绕过 CORS 并 SSE 保活；后台任务适合 App 切后台，会把结果自动上传 PiXhost 并写入 D1；浏览器直连链路更短但上游必须允许 CORS。'}</small>
+            <div className="mode-help">
+              <p><strong>流式代理</strong>：默认推荐，前台等待结果，适合即时生成和查看错误。</p>
+              <p><strong>后台任务</strong>：适合批量或耗时生成，切到后台也会继续执行；结果会上传图床并写入云端任务。</p>
+              <p><strong>浏览器直连</strong>：链路最短，但需要上游支持 CORS；服务端托管 API Key 时不可选。</p>
+            </div>
           </div>
 
           {managedApi ? (

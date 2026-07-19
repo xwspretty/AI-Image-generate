@@ -6,59 +6,57 @@
   </a>
 </p>
 
-轻量级 AI 生图工作台：前端配置自定义 API URL / Key，Cloudflare Worker 负责代理请求，支持文生图、图生图、短描述生成提示词、模型列表获取、多图生成、多任务队列、超时、比例、分辨率档位、适配预览、本地历史、PiXhost 图床上传和友好错误提示。
+AI Image Generate 是一个部署在 Cloudflare Workers 上的轻量级 AI 生图工作台。它支持文生图、图生图、短描述生成提示词、多图并发生成、后台任务、本地历史、图床上传和两层访问控制，适合个人或小范围团队自用。
 
-## 功能
+前端使用 React + Vite，后端使用 Cloudflare Workers。长任务由 Cloudflare Workflows 执行，任务状态和统计写入 D1。
 
-- API URL / API Key 保存在浏览器本地，不保存在 Worker。
-- 可配置站点访问口令；未通过门禁的人无法进入 App，也无法直接调用 Worker API。
-- 首次进入 App 后需要自行设置至少 10 位复杂空间密码；相同密码共享同一个云端任务空间，不同密码任务互相隔离。
-- 会拒绝过于简单的空间密码，例如连续数字、重复字符、重复片段、键盘顺序、常见弱密码词和明显日期。
-- Worker 接口不再使用单独访问密码，统一通过空间密码派生出的访问令牌校验。
-- 支持三种请求方式：`Worker 流式代理`、`Worker 后台任务` 和 `浏览器直连`。
-- 支持文生图与图生图，图生图可上传多张参考图；生成结果和历史图片也可以一键加入参考图。
-- 支持短描述生成完整提示词，可复制或直接填入主提示词。
-- 支持从当前 API 获取模型列表，设置页会过滤出常用生图模型和 mini 系提示词模型。
-- 支持一次生成多张：按并发数拆成多个单图请求，完成一张展示一张。
-- 支持多任务队列：任务提交后页面可以继续提交新任务。
-- 支持 Worker 后台任务模式：任务由 Cloudflare Workflows 执行，D1 保存任务状态和 PiXhost 图片直链；App/WebView 切后台后，回到前台会自动恢复任务。
-- 支持比例：`自动`、`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`9:16`、`16:9`。
-- 支持分辨率档位：`自动`、`标准`、`2K`、`4K`。
-- 支持生成结果操作：下载、复制到剪贴板、作为图生图参考图、适配预览和全屏细节查看。
-- App / WebView 下的图床图片展示、下载、复制会走 Worker 图片代理，避免 PiXhost 直链跳转和 CORS 导致的复制失败。
-- 图片预览已抽离为独立组件，默认完整适配显示；点击图片进入全屏细节查看，可滚动查看大图，并支持复制图片 / URL。
-- 支持自动上传或单张手动上传生成图到 PiXhost 图床；自动上传可关闭，手动上传可在图片悬浮时点击「上传图床」。
-- 上传失败后图片悬浮按钮会显示「重试上传」；上传成功后可复制 PiXhost 图片直链 URL。
-- 后台任务支持失败后重试、按空间密码隔离的云端任务列表同步，并显示当前身份空间的「今日已生成」与「累计已生成」统计。
-- 支持超时时间：默认 420 秒，最大 900 秒。
-- 历史记录保存在浏览器 IndexedDB，本地历史栏支持一键收起/展开，历史缩略图支持放大预览、复制、作为参考图，也可以一键「放到结果」在中间区域完整查看多张历史图；已上传图床的图片会同步保存图床 URL，后续可继续复制。
-- 针对常见错误提供明确提示：401 Key 错误或额度问题、403 无权限 / 模型不可用、413 图片太大、429 限流、524 Cloudflare 100 秒熔断、CORS 建议切换 Worker 模式。
+## 项目来源
 
+本项目基于 [y08lin4/AI-Image-generate](https://github.com/y08lin4/AI-Image-generate) fork 后二次开发，并在原有 AI 生图能力基础上做了面向个人自用部署的改造。当前仓库主要新增或调整了 Cloudflare Workers 部署、站点访问口令、服务端托管 API Key、空间密码隔离、后台任务、提示词生成、参考图复用、图床上传、本地历史和页面 UI 等功能。
 
-## 站点访问口令
+## 功能概览
 
-如果不希望知道域名的人直接使用站点，请在 Cloudflare Worker 上设置一个访问口令。未登录用户只会看到极简访问页；没有登录 cookie 的请求会被 `/api/*` 拒绝。
+- 文生图和图生图，图生图支持最多 8 张参考图。
+- 生成结果、本地历史图片可以继续作为参考图使用。
+- 短描述生成完整提示词，支持复制或一键填入主提示词。
+- 支持多张生成、并发控制、任务队列、超时设置。
+- 支持比例和分辨率档位：自动、标准、2K、4K。
+- 支持 Worker 流式代理、Worker 后台任务、浏览器直连三种请求方式。
+- 支持服务端托管 API Key，使用者无需在页面里填写 API 配置。
+- 支持站点访问口令，避免知道域名的人直接使用。
+- 支持空间密码隔离云端任务，不同密码对应不同任务空间。
+- 支持自动或手动上传生成图到 PiXhost 图床。
+- 支持本地历史、历史图预览、复制、下载、加入参考图。
+- 支持图片适配预览和全屏细节查看。
+- 支持云端后台任务恢复、重试、今日生成数和累计生成数统计。
+- 针对 401、403、413、429、502、524、CORS 等常见错误提供中文提示。
 
-推荐用 Cloudflare Secret 保存口令：
+## 访问控制
+
+项目有两层访问控制，作用不同：
+
+| 名称 | 配置位置 | 作用 |
+| --- | --- | --- |
+| 站点访问口令 | Cloudflare Secret `SW_SITE_ACCESS_PASSWORD` | 进入网站前的门禁。未通过门禁时只能看到口令页，`/api/*` 会返回 401。 |
+| 空间密码 | 用户在设置页输入 | 派生本地身份令牌，用于 Worker API 校验、云端任务归属隔离和任务同步。 |
+
+站点访问口令推荐用 Cloudflare Secret 保存：
 
 ```bash
 npx wrangler secret put SW_SITE_ACCESS_PASSWORD
 ```
 
-按提示输入你的访问口令即可。后续要修改口令，可以在 Cloudflare 控制台的 Worker 变量/Secret 中更新 `SW_SITE_ACCESS_PASSWORD`，或者重新执行上面的命令。
+`SW_SITE_ACCESS_PASSWORD` 兼容旧变量 `SITE_ACCESS_PASSWORD`，但新部署建议统一使用 `SW_` 前缀。
 
+## 服务端托管 API
 
-## 服务端托管上游 API
+如果网站只给自己或少数人使用，推荐把上游 API 配置放到 Cloudflare Worker 环境变量里。这样使用者进入站点后无需填写 API URL、API Key 和模型名称，只需要关注提示词、参考图和生成参数。
 
-如果这个站点只给自己或少数人使用，推荐把上游 API 配置放到 Cloudflare Worker 环境变量里。这样使用者进入站点后无需填写 API URL / API Key，只关注提示词、比例、分辨率和生成参数。
-
-变量统一使用 `SW_` 前缀，方便和其他 Worker 项目区分：
-
-| 变量 | 类型 | 用途 |
+| 变量 | 类型 | 说明 |
 | --- | --- | --- |
-| `SW_SITE_ACCESS_PASSWORD` | Secret | 站点访问口令。兼容旧变量 `SITE_ACCESS_PASSWORD`。 |
 | `SW_UPSTREAM_API_KEY` | Secret | 上游 API Key。 |
-| `SW_UPSTREAM_BASE_URL` | 普通变量 | 上游 API 根地址，默认可用 `https://api.openai.com/v1`。 |
+| `SW_UPSTREAM_BASE_URL` | 普通变量 | 上游 API 根地址，例如 `https://api.openai.com/v1`。 |
+| `SW_MANAGED_API_ENABLED` | 普通变量或 Secret | 服务端托管开关。`true/1/on` 开启，`false/0/off` 关闭；未设置时有 URL 和 Key 就自动开启。 |
 | `SW_IMAGE_MODEL` | 普通变量 | 默认生图模型，例如 `gpt-image-2`。 |
 | `SW_PROMPT_MODEL` | 普通变量 | 默认提示词模型，例如 `gpt-5.4-mini`。 |
 
@@ -68,24 +66,51 @@ npx wrangler secret put SW_SITE_ACCESS_PASSWORD
 npx wrangler secret put SW_UPSTREAM_API_KEY
 ```
 
-设置或更换站点访问口令：
+托管模式开启后：
 
-```bash
-npx wrangler secret put SW_SITE_ACCESS_PASSWORD
+- 设置页会隐藏 API URL、API Key 和模型选择。
+- 浏览器直连会置灰不可选，避免 API Key 暴露到前端。
+- Worker 流式代理和 Worker 后台任务会使用服务端环境变量里的 API 配置。
+- 如需临时恢复手动配置，把 `SW_MANAGED_API_ENABLED` 设置为 `false`。
+
+## 请求方式
+
+### Worker 流式代理
+
+```text
+浏览器 -> /api/generate-stream -> Worker -> 上游图片接口
 ```
 
-当 `SW_UPSTREAM_BASE_URL` 和 `SW_UPSTREAM_API_KEY` 都存在时，前端会自动进入“服务端托管”模式，隐藏 API URL / API Key / 模型选择，只保留使用参数。
+默认推荐。Worker 负责请求上游接口，可以绕过 CORS，并通过 SSE 在生成期间保活。多图生成时，完成一张返回一张。
 
-## 接口约定
+### Worker 后台任务
 
-本项目只针对 `gpt-image-2` 的两个图片接口：
+```text
+浏览器/App -> /api/background-tasks -> Worker -> Cloudflare Workflows -> 上游图片接口 -> PiXhost/D1
+```
+
+适合耗时较长或 App/WebView 切后台的场景。任务提交后由 Cloudflare Workflows 继续执行，前端回到页面时会同步云端任务状态。
+
+后台任务会把成功结果上传到 PiXhost 并保存直链；如果图片超过 PiXhost 单张 10MB 限制，Worker 会临时把原图分片写入 D1，前端同步时再拉回本地保存历史。
+
+### 浏览器直连
+
+```text
+浏览器 -> 上游 /images/generations 或 /images/edits
+```
+
+链路最短，API Key 不经过 Worker，但要求上游支持浏览器 CORS。服务端托管 API Key 时不可使用浏览器直连。
+
+## 图片接口约定
+
+项目面向 OpenAI 风格图片接口，当前默认模型为 `gpt-image-2`。
 
 | 模式 | 上游接口 |
 | --- | --- |
 | 文生图 | `POST /v1/images/generations` |
 | 图生图 | `POST /v1/images/edits` |
 
-设置里的 API URL 请填写根地址，例如：
+API URL 请填写根地址，例如：
 
 ```text
 https://api.example.com/v1
@@ -93,27 +118,9 @@ https://api.example.com/v1
 
 如果误填完整接口地址，例如 `https://api.example.com/v1/images/generations`，Worker 会自动规整为 `https://api.example.com/v1` 后再拼接正确接口。
 
-图生图支持最多 8 张参考图，前端会以 `image[]` 字段追加到 `multipart/form-data`：
-
-```text
-image[]
-image[]
-...
-```
-
-单张参考图限制 12MB，总大小限制 50MB。
+图生图会以 `image[]` 字段追加到 `multipart/form-data`。单张参考图限制 12MB，总大小限制 50MB。
 
 ## 比例和分辨率
-
-界面会先选择分辨率，再根据分辨率给出可选比例：
-
-- 比例控制宽高关系，例如 `1:1`、`16:9`、`9:16`。
-- 分辨率档位控制输出像素大小，例如 `标准`、`2K`、`4K`。
-- 分辨率和比例都选择 `自动` 时，前端和 Worker 不会向上游传 `size` 参数，由模型或上游接口自行决定图片尺寸。
-- 分辨率选择 `自动`、比例选择具体值时，会按 `标准` 档尺寸传给接口，确保 `16:9`、`9:16` 等比例不会被上游改成其它方向。
-- 分辨率选择 `标准 / 2K / 4K` 时，比例必须选择具体值，避免出现「选了 4K 但比例还是自动，实际没有传 size」的情况。
-
-当前内置尺寸映射：
 
 | 比例 | 标准 | 2K | 4K |
 | --- | --- | --- | --- |
@@ -125,145 +132,130 @@ image[]
 | `9:16` | `1008x1792` | `1152x2048` | `2160x3840` |
 | `16:9` | `1792x1008` | `2048x1152` | `3840x2160` |
 
-> 生成4K速度相较于其他分辨率较慢，且 OpenAI 官方链路在 4K 生图时可能不稳定；如果出现 502，建议直接重试或切换其他线路。
-> 后台任务会优先把结果上传到 PiXhost 保存直链。PiXhost 单张图片最大 10MB；如果原图超过 10MB，Worker 不会压缩，会把原图临时分片存入 D1，前端轮询到结果后再原样拉回本地展示和保存到本地历史。
+说明：
 
-## 请求方式
+- 分辨率和比例都选自动时，不向上游传 `size` 参数。
+- 分辨率选自动、比例选具体值时，会按标准档尺寸传给接口。
+- 分辨率选标准、2K 或 4K 时，比例必须选择具体值。
+- 4K 生成更慢，部分上游线路可能更容易出现 502，遇到时建议重试或切换线路。
 
-### Worker 流式代理（默认）
+## PiXhost 图床
 
-```text
-浏览器 -> /api/generate-stream -> Worker -> 上游图片接口
-```
+开启自动上传后，成功生成的图片会上传到 PiXhost。上传成功后可以复制图片直链 URL。
 
-- 推荐使用。
-- 可以绕过上游 CORS 限制。
-- Worker 使用 SSE 保活，生成期间每 10 秒发送一次 `ping`。
-- 多图生成时，哪一张先完成就先返回哪一张。
-- 需要先输入空间密码。
-- 自动上传 PiXhost 图床也通过 Worker 代理，并复用空间密码派生出的访问令牌。
+如果关闭自动上传，仍可以在单张图片悬浮操作里手动上传。上传失败后可以重试。已上传成功的 URL 会写入本地历史，刷新后仍可复制。
 
-### Worker 后台任务
+注意：
 
-```text
-浏览器/App -> /api/background-tasks -> Worker -> Cloudflare Workflows -> 上游图片接口 -> PiXhost -> D1
-```
+- PiXhost 是第三方图床，私密图片不建议开启自动上传。
+- PiXhost 单张图片最大 10MB，4K PNG 可能超过限制。
+- App/WebView 下展示、下载、复制图床图片会走 Worker 图片代理，减少直链跳转和 CORS 问题。
 
-- 适合 100-300 秒的长时间生图，尤其适合 App/WebView 切后台场景。
-- 文生图和图生图都支持后台任务；图生图会先把参考图上传 PiXhost，再把参考图 URL 交给 Workflow 使用。
-- 生成结果会自动上传 PiXhost，D1 只保存任务状态、参数摘要和图片直链，不保存生成图片二进制。
-- D1 不保存 API Key；重试失败任务时，需要浏览器当前设置里仍有 API Key。
-- 前端会在 `visibilitychange` / `focus` 时自动同步当前空间密码下的未完成任务，也可以手动点「同步云端任务」。
-- 浏览器本地和 D1 都不会保存明文空间密码：前端会先用不可逆算法派生访问令牌，D1 只保存归属 hash（`owner_hash`）；查询、重试、图片回传都会校验该归属。
-- 需要 Cloudflare D1 和 Workflows 绑定。
+## Cloudflare 资源
 
-### 浏览器直连
+项目使用这些 Cloudflare 能力：
 
-```text
-浏览器 -> 上游 /images/generations 或 /images/edits
-```
-
-- 链路最短，API Key 完全不经过 Worker。
-- 上游必须支持浏览器 CORS。
-- HTTPS 页面无法直连 HTTP API；这种情况请使用 Worker 代理。
-- 如果出现 `Failed to fetch`，通常是 CORS 或网络策略问题。
-- 如果上游返回 `HTTP 524`，通常是 Cloudflare 100 秒自动熔断；可切换其他线路域名或改用非 Cloudflare 中转后重试。
-
-## PiXhost 图床上传
-
-在「设置」里开启 **生成成功后自动上传到 PiXhost 图床** 后，每张成功生成的图片会自动上传到 PiXhost。上传成功后，鼠标悬浮到结果图上会出现 **复制URL** 按钮，点击可复制 PiXhost 图片直链。
-
-如果关闭自动上传，单张生成图仍然可以手动上传：鼠标悬浮到图片上点击 **上传图床**。如果上传失败，悬浮按钮会变成 **重试上传**，再次点击即可重试。上传成功的图床 URL 会写入本地历史记录，刷新页面后仍可在历史缩略图或全屏预览里复制 URL。
-
-实现说明：
-
-- 前端把生成图的 `data URL` 发送到 Worker 的 `POST /api/upload-pixhost`。
-- Worker 校验访问令牌后，用 `multipart/form-data` 调用 PiXhost `POST https://api.pixhost.to/images`。
-- 上传字段：
-  - `img`：图片文件。
-  - `content_type=0`：按 PiXhost 文档表示 safe 图片。
-  - `max_th_size=420`：缩略图最大尺寸。
-- 返回后会把 PiXhost 的 `show_url` 从 `https://pixhost.to/show/...` 转成 `https://img2.pixhost.to/images/...` 图片直链再复制。
-- 前端展示、下载和复制图床图片时会使用 `GET /api/image-proxy?url=...` 代理读取 PiXhost 图片，解决 App WebView 直接打开 URL 或浏览器 CORS 导致复制失败的问题。
-- PiXhost 限制：支持 `JPG / PNG / GIF`，单张最大 `10MB`。4K PNG 可能超过 10MB，超过时会显示上传失败，但不影响原图下载。
-- 后台任务模式下，如果 PiXhost 因 10MB 限制拒绝上传，Worker 会把原始图片分片写入 D1，并通过 `GET /api/background-tasks/:id/images/:index` 回传到本地；不压缩、不改格式。
-
-> 自动上传会把图片发送到第三方图床。涉及私密图片时请不要开启。
-
-后台任务模式下，生成结果和图生图参考图都会经过 PiXhost，因为本项目不使用 R2 存图片，只在 D1 保存图片直链。
-
-## 错误提示
-
-前端和 Worker 会尽量把常见 HTTP / 网络错误转换成可操作的中文提示：
-
-| 错误 | 含义与建议 |
+| 资源 | 用途 |
 | --- | --- |
-| `401` | API Key 错误或额度问题，请检查 Key、账户余额和接口权限。 |
-| `403` | 无权限访问该接口或模型，模型可能不可用。 |
-| `502` | 上游网关错误；4K 生图时 OpenAI 官方链路可能不稳定，出现 502 请重试或切换其他线路。 |
-| `413` | 图片太大，请压缩图片、减少参考图或降低分辨率。 |
-| `429` | 请求过多触发限流，请降低并发、减少张数或稍后重试。 |
-| `524` | Cloudflare 100 秒自动熔断，可切换其他线路域名或非 Cloudflare 中转。 |
-| `CORS` | 浏览器直连被上游拦截，建议切换到 Worker 流式代理模式。 |
+| Workers | API 代理、访问门禁、图片代理、静态资源托管。 |
+| Static Assets | 托管 Vite 构建后的前端资源。 |
+| D1 | 保存后台任务状态、结果摘要、统计数据和超大图片临时分片。 |
+| Workflows | 执行后台生图任务。 |
+| Secrets / Variables | 保存站点口令、上游 API Key、模型和开关。 |
 
-## 一键部署
+## 环境变量
 
-点击上方 **Deploy to Cloudflare** 按钮即可从 GitHub 仓库创建 Cloudflare Worker。部署后打开站点，自行设置至少 10 位复杂空间密码即可进入对应云端任务空间。
-
-> 注意：按钮依赖 GitHub 上的当前仓库内容。第一次使用前，需要先把代码提交并推送到 `https://github.com/xwspretty/AI-Image-generate`。
+| 变量 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `SW_SITE_ACCESS_PASSWORD` | Secret | 空 | 站点访问口令。为空时不启用门禁。 |
+| `SW_UPSTREAM_API_KEY` | Secret | 空 | 服务端托管模式使用的上游 API Key。 |
+| `SW_UPSTREAM_BASE_URL` | 普通变量 | `https://api.openai.com/v1` | 服务端托管模式使用的 API 根地址。 |
+| `SW_MANAGED_API_ENABLED` | 普通变量或 Secret | 空 | 托管开关。未设置时根据 URL 和 Key 自动判断。 |
+| `SW_IMAGE_MODEL` | 普通变量 | `gpt-image-2` | 默认生图模型。 |
+| `SW_PROMPT_MODEL` | 普通变量 | `gpt-5.4-mini` | 默认提示词模型。 |
+| `ALLOW_HTTP_API` | 普通变量 | `true` | 是否允许 HTTP API 地址。 |
+| `ALLOW_PRIVATE_HOSTS` | 普通变量 | `false` | 是否允许代理内网、localhost、metadata 地址。 |
 
 ## 本地开发
 
+安装依赖：
+
 ```bash
 npm install
+```
+
+只启动前端：
+
+```bash
 npm run dev
 ```
 
-纯 Vite 开发只跑前端，`/api/generate-stream` 不会生效。要完整测试 Worker：
+完整测试 Worker：
 
 ```bash
 npm run worker:dev
 ```
 
-## 部署到 Cloudflare Worker
+纯 Vite 开发只跑前端，Worker API 不会生效。需要测试 `/api/generate-stream`、后台任务、D1、Workflows 时，请使用 Worker 开发模式。
 
-1. 创建 D1 数据库并应用迁移：
+## 部署到 Cloudflare
+
+1. 创建 D1 数据库：
 
 ```bash
 npx wrangler d1 create ai-image-generate
+```
+
+把返回的 `database_id` 填入 `wrangler.jsonc`。
+
+2. 应用 D1 迁移：
+
+```bash
 npx wrangler d1 migrations apply ai-image-generate --remote
 ```
 
-如果 Wrangler 返回 `database_id`，请按提示把它填进 `wrangler.jsonc` 的 `d1_databases` 配置中。
+3. 设置 Secret：
 
-2. 修改 `wrangler.jsonc`：
-
-```jsonc
-"vars": {
-  "ALLOW_HTTP_API": "true",
-  "ALLOW_PRIVATE_HOSTS": "false"
-}
+```bash
+npx wrangler secret put SW_SITE_ACCESS_PASSWORD
+npx wrangler secret put SW_UPSTREAM_API_KEY
 ```
 
-3. 部署：
+4. 按需修改 `wrangler.jsonc` 中的域名、D1 ID、模型和普通变量。
+
+5. 部署：
 
 ```bash
 npm run worker:deploy
 ```
 
-4. 打开站点后，先输入空间密码，再在「设置」里填写：
+`worker:deploy` 使用 `wrangler deploy --keep-vars`，会尽量保留 Cloudflare 控制台里维护的变量和 Secret，避免部署时覆盖线上配置。
 
-- 空间密码：至少 10 位，建议包含大小写字母、数字和符号；多设备输入同一个密码即可同步同一个云端任务空间
-- API URL：例如 `https://api.openai.com/v1`
-- API Key：你的上游 API Key
-- 生图模型：默认 `gpt-image-2`；提示词模型：默认 `gpt-5.4-mini`，也可以在设置页获取模型列表后选择
-- 请求方式：默认选 `Worker 流式代理`；App 长任务建议选 `Worker 后台任务`；如果上游支持 CORS，可以改成 `浏览器直连`
+## 一键部署
+
+点击 README 顶部的 Deploy to Cloudflare 按钮可以从 GitHub 仓库创建 Worker。
+
+注意：一键部署依赖 GitHub 上的当前仓库内容。首次使用前，需要先把代码提交并推送到 `https://github.com/xwspretty/AI-Image-generate`。D1、Workflows、Secret 和自定义域名仍建议在 Cloudflare 控制台或 Wrangler 中核对配置。
+
+## 提交前检查
+
+```bash
+npm run build
+git diff --check
+git status -sb
+```
 
 ## 安全说明
 
-- Worker 不保存 API Key，也不打印请求体。
-- Worker 后台任务为了断流后继续执行，会把 API Key 传给 Cloudflare Workflow 实例使用；D1 不保存 API Key。
-- 空间密码用于进入应用、访问 Worker 接口，并区分云端任务归属。
-- 浏览器只保存不可逆派生后的访问令牌，Worker/D1 只保存归属 hash，不保存明文空间密码。
+- 不要把 API Key、站点访问口令写入源码或提交到 GitHub。
+- 浏览器手动配置模式下，API URL 和 API Key 保存在浏览器本地或会话存储中。
+- 服务端托管模式下，API Key 保存在 Cloudflare Secret 中，前端不会看到 Key。
+- Worker 不把 API Key 写入 D1，也不主动打印请求体。
+- 后台任务执行时会把 API Key 传给 Cloudflare Workflow 实例使用，但不会写入 D1。
+- 空间密码不会明文保存；前端派生访问令牌，Worker/D1 只保存归属 hash。
 - 默认阻止代理 localhost、内网 IP 和 metadata 地址。
-- 如果不想允许 HTTP API，把 `ALLOW_HTTP_API` 改成 `false`。
+- 自动上传会把图片发送到第三方图床，私密图片请谨慎使用。
+
+## 许可证
+
+当前仓库未声明开源许可证。如需公开给他人复用，建议补充 LICENSE 文件。
