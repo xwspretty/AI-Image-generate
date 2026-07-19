@@ -63,6 +63,15 @@ export interface PromptBuilderResponse {
   model: string
 }
 
+export interface RuntimeConfig {
+  ok: true
+  managedApi: boolean
+  baseUrlConfigured: boolean
+  apiKeyConfigured: boolean
+  imageModel: string
+  promptModel: string
+}
+
 export interface GenerateResultItem {
   index: number
   ok: boolean

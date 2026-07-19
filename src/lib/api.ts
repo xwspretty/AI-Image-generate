@@ -8,11 +8,16 @@ import type {
   GenerateSuccessResponse,
   PromptBuilderRequest,
   PromptBuilderResponse,
+  RuntimeConfig,
   InputImage,
   StreamEvent,
 } from '../types'
 import { getImageSize } from './ratios'
 
+export async function getRuntimeConfig(): Promise<RuntimeConfig> {
+  const data = await getJson<RuntimeConfig>('/api/runtime-config')
+  return data
+}
 export function createId(prefix = 'id') {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
@@ -71,12 +76,12 @@ export async function buildPromptDirect(payload: PromptBuilderRequest): Promise<
     ...payload,
     baseUrl: normalizeBaseUrlForBrowser(payload.baseUrl),
     description: payload.description.trim(),
-    promptModel: payload.promptModel.trim(),
-    targetModel: payload.targetModel.trim(),
+    promptModel: String(payload.promptModel || '').trim(),
+    targetModel: String(payload.targetModel || '').trim(),
   }
   if (!normalizedPayload.description) throw new Error('请先输入一小段画面描述')
   if (!normalizedPayload.promptModel) throw new Error('请先填写提示词模型')
-  if (!normalizedPayload.apiKey.trim()) throw new Error('请先填写 API Key')
+  if (!String(normalizedPayload.apiKey || '').trim()) throw new Error('请先填写 API Key')
 
   const response = await fetch(buildUpstreamUrl(normalizedPayload.baseUrl, 'chat/completions'), {
     method: 'POST',

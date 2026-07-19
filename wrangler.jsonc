@@ -35,7 +35,9 @@
   ],
   "vars": {
     "ALLOW_HTTP_API": "true",
-    "ALLOW_PRIVATE_HOSTS": "false"
+    "ALLOW_PRIVATE_HOSTS": "false",
+    "SW_UPSTREAM_BASE_URL": "https://api.openai.com/v1",
+    "SW_IMAGE_MODEL": "gpt-image-2",
+    "SW_PROMPT_MODEL": "gpt-5.4-mini"
   }
 }
-

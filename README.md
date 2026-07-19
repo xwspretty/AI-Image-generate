@@ -42,10 +42,39 @@
 推荐用 Cloudflare Secret 保存口令：
 
 ```bash
-npx wrangler secret put SITE_ACCESS_PASSWORD
+npx wrangler secret put SW_SITE_ACCESS_PASSWORD
 ```
 
-按提示输入你的访问口令即可。后续要修改口令，可以在 Cloudflare 控制台的 Worker 变量/Secret 中更新 `SITE_ACCESS_PASSWORD`，或者重新执行上面的命令。
+按提示输入你的访问口令即可。后续要修改口令，可以在 Cloudflare 控制台的 Worker 变量/Secret 中更新 `SW_SITE_ACCESS_PASSWORD`，或者重新执行上面的命令。
+
+
+## 服务端托管上游 API
+
+如果这个站点只给自己或少数人使用，推荐把上游 API 配置放到 Cloudflare Worker 环境变量里。这样使用者进入站点后无需填写 API URL / API Key，只关注提示词、比例、分辨率和生成参数。
+
+变量统一使用 `SW_` 前缀，方便和其他 Worker 项目区分：
+
+| 变量 | 类型 | 用途 |
+| --- | --- | --- |
+| `SW_SITE_ACCESS_PASSWORD` | Secret | 站点访问口令。兼容旧变量 `SITE_ACCESS_PASSWORD`。 |
+| `SW_UPSTREAM_API_KEY` | Secret | 上游 API Key。 |
+| `SW_UPSTREAM_BASE_URL` | 普通变量 | 上游 API 根地址，默认可用 `https://api.openai.com/v1`。 |
+| `SW_IMAGE_MODEL` | 普通变量 | 默认生图模型，例如 `gpt-image-2`。 |
+| `SW_PROMPT_MODEL` | 普通变量 | 默认提示词模型，例如 `gpt-5.4-mini`。 |
+
+设置 API Key：
+
+```bash
+npx wrangler secret put SW_UPSTREAM_API_KEY
+```
+
+设置或更换站点访问口令：
+
+```bash
+npx wrangler secret put SW_SITE_ACCESS_PASSWORD
+```
+
+当 `SW_UPSTREAM_BASE_URL` 和 `SW_UPSTREAM_API_KEY` 都存在时，前端会自动进入“服务端托管”模式，隐藏 API URL / API Key / 模型选择，只保留使用参数。
 
 ## 接口约定
 
@@ -238,4 +267,3 @@ npm run worker:deploy
 - 浏览器只保存不可逆派生后的访问令牌，Worker/D1 只保存归属 hash，不保存明文空间密码。
 - 默认阻止代理 localhost、内网 IP 和 metadata 地址。
 - 如果不想允许 HTTP API，把 `ALLOW_HTTP_API` 改成 `false`。
-

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AppSettings } from '../types'
+import type { AppSettings, RuntimeConfig } from '../types'
 import { listModelsDirect, listModelsViaWorker } from '../lib/api'
 import { clearSettings, deriveIdentityTokenFromPassword, IDENTITY_TOKEN_MIN_LENGTH, isValidIdentityToken, maskSecret, normalizeIdentityToken, validateSpacePassword } from '../lib/storage'
 
@@ -22,18 +22,22 @@ function filterImageModels(models: string[]) {
 function filterPromptModels(models: string[]) {
   return models.filter((model) => /^gpt-.*mini/i.test(model) && !/image|tts|audio|transcribe|embedding|moderation|sora/i.test(model))
 }
+
 function selectValue(value: string, options: string[], customOpen: boolean) {
   return customOpen || !options.includes(value) ? '__custom__' : value
 }
+
 interface Props {
   open: boolean
   settings: AppSettings
   onClose: () => void
   onSave: (settings: AppSettings) => void
   onMessage: (message: string, type?: 'ok' | 'error') => void
+  runtimeConfig?: RuntimeConfig | null
 }
 
-export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Props) {
+export function SettingsModal({ open, settings, onClose, onSave, onMessage, runtimeConfig }: Props) {
+  const managedApi = runtimeConfig?.managedApi === true
   const [draft, setDraft] = useState(settings)
   const [spacePasswordDraft, setSpacePasswordDraft] = useState('')
   const [showSecrets, setShowSecrets] = useState(false)
@@ -44,13 +48,13 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
 
   useEffect(() => {
     if (open) {
-      setDraft(settings)
+      setDraft(managedApi && settings.requestMode === 'direct' ? { ...settings, requestMode: 'worker' } : settings)
       setSpacePasswordDraft('')
       setModelOptions([])
       setCustomImageModelOpen(false)
       setCustomPromptModelOpen(false)
     }
-  }, [open, settings])
+  }, [open, settings, managedApi])
 
   if (!open) return null
 
@@ -74,12 +78,16 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
       onMessage(`请设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位的复杂空间密码`, 'error')
       return
     }
-    onSave({ ...draft, identityToken })
+    onSave({ ...draft, requestMode: managedApi && draft.requestMode === 'direct' ? 'worker' : draft.requestMode, identityToken })
     onClose()
     onMessage('设置已保存到浏览器本地', 'ok')
   }
 
   async function refreshModels() {
+    if (managedApi) {
+      onMessage('服务端已托管 API 配置，无需手动获取模型列表', 'ok')
+      return
+    }
     if (!draft.baseUrl.trim()) {
       onMessage('请先填写 API URL', 'error')
       return
@@ -108,8 +116,6 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
       setLoadingModels(false)
     }
   }
-  const imageModelOptions = uniqueOptions([DEFAULT_IMAGE_MODEL], filterImageModels(modelOptions), draft.model === DEFAULT_IMAGE_MODEL ? [] : [draft.model])
-  const promptModelOptions = uniqueOptions([DEFAULT_PROMPT_MODEL], filterPromptModels(modelOptions), draft.promptModel === DEFAULT_PROMPT_MODEL ? [] : [draft.promptModel])
 
   function clearLocal() {
     clearSettings()
@@ -118,13 +124,16 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
     onClose()
   }
 
+  const imageModelOptions = uniqueOptions([DEFAULT_IMAGE_MODEL], filterImageModels(modelOptions), draft.model === DEFAULT_IMAGE_MODEL ? [] : [draft.model])
+  const promptModelOptions = uniqueOptions([DEFAULT_PROMPT_MODEL], filterPromptModels(modelOptions), draft.promptModel === DEFAULT_PROMPT_MODEL ? [] : [draft.promptModel])
+
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <section className="settings-modal" role="dialog" aria-modal="true" aria-label="设置">
         <header className="modal-header">
           <div>
             <h2>设置</h2>
-            <p>API Key / URL 保存在浏览器里；空间密码只保存不可逆派生结果。</p>
+            <p>{managedApi ? 'API Key / URL 已由服务端托管；空间密码只保存不可逆派生结果。' : 'API Key / URL 保存在浏览器里；空间密码只保存不可逆派生结果。'}</p>
           </div>
           <button type="button" className="icon-btn" onClick={onClose}>×</button>
         </header>
@@ -133,194 +142,92 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
           <div className="field full">
             <span>请求方式</span>
             <div className="request-mode-tabs">
-              <button
-                type="button"
-                className={draft.requestMode === 'worker' ? 'active' : ''}
-                onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'worker' }))}
-              >
-                Worker 流式代理
-              </button>
-              <button
-                type="button"
-                className={draft.requestMode === 'background' ? 'active' : ''}
-                onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'background' }))}
-              >
-                Worker 后台任务
-              </button>
-              <button
-                type="button"
-                className={draft.requestMode === 'direct' ? 'active' : ''}
-                onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'direct' }))}
-              >
-                浏览器直连
-              </button>
+              <button type="button" className={draft.requestMode === 'worker' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'worker' }))}>Worker 流式代理</button>
+              <button type="button" className={draft.requestMode === 'background' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'background' }))}>Worker 后台任务</button>
+              {!managedApi ? <button type="button" className={draft.requestMode === 'direct' ? 'active' : ''} onClick={() => setDraft((prev) => ({ ...prev, requestMode: 'direct' }))}>浏览器直连</button> : null}
             </div>
-            <small>
-              流式代理可绕过 CORS 并 SSE 保活；后台任务适合 App 切后台，会把结果自动上传 PiXhost 并写入 D1；浏览器直连链路更短但上游必须允许 CORS。
-            </small>
+            <small>{managedApi ? '服务端已托管 API Key，仅使用 Worker 流式代理或后台任务。' : '流式代理可绕过 CORS 并 SSE 保活；后台任务适合 App 切后台，会把结果自动上传 PiXhost 并写入 D1；浏览器直连链路更短但上游必须允许 CORS。'}</small>
           </div>
 
-          <label className="field full">
-            <span>API URL</span>
-            <input
-              value={draft.baseUrl}
-              placeholder="https://api.openai.com/v1"
-              onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-            />
-            <small>填写 API 根地址，例如 <code>https://api.example.com/v1</code>。</small>
-          </label>
+          {managedApi ? (
+            <div className="field full">
+              <span>API 配置</span>
+              <small>已由服务端托管：生图模型 {runtimeConfig?.imageModel || '默认'}，提示词模型 {runtimeConfig?.promptModel || '默认'}。</small>
+            </div>
+          ) : (
+            <>
+              <label className="field full">
+                <span>API URL</span>
+                <input value={draft.baseUrl} placeholder="https://api.openai.com/v1" onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })} />
+                <small>填写 API 根地址，例如 <code>https://api.example.com/v1</code>。</small>
+              </label>
 
-          <label className="field full">
-            <span>API Key</span>
-            <input
-              type={showSecrets ? 'text' : 'password'}
-              value={draft.apiKey}
-              placeholder="sk-..."
-              autoComplete="off"
-              onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
-            />
-            <small>当前：{maskSecret(draft.apiKey)}</small>
-          </label>
+              <label className="field full">
+                <span>API Key</span>
+                <input type={showSecrets ? 'text' : 'password'} value={draft.apiKey} placeholder="sk-..." autoComplete="off" onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} />
+                <small>当前：{maskSecret(draft.apiKey)}</small>
+              </label>
+            </>
+          )}
 
           <label className="field full">
             <span>空间密码</span>
-            <input
-              type={showSecrets ? 'text' : 'password'}
-              value={spacePasswordDraft}
-              placeholder={`留空不修改；新密码至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，并包含多种字符`}
-              autoComplete="new-password"
-              onChange={(e) => setSpacePasswordDraft(e.target.value)}
-            />
-            <small>
-              当前：{isValidIdentityToken(draft.identityToken) ? '已用不可逆算法保存' : '未设置'}。输入完全相同的空间密码会进入同一个云端任务空间；不同密码任务互相隔离。
-            </small>
+            <input type={showSecrets ? 'text' : 'password'} value={spacePasswordDraft} placeholder={`留空不修改；新密码至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位，并包含多种字符`} autoComplete="new-password" onChange={(e) => setSpacePasswordDraft(e.target.value)} />
+            <small>当前：{isValidIdentityToken(draft.identityToken) ? '已用不可逆算法保存' : '未设置'}。输入完全相同的空间密码会进入同一个云端任务空间；不同密码任务互相隔离。</small>
           </label>
 
-          <div className="field full">
-            <div className="model-field-header">
-              <span>模型选择</span>
-              <button type="button" className="ghost-btn small" disabled={loadingModels} onClick={() => void refreshModels()}>
-                {loadingModels ? '获取中...' : '获取模型列表'}
-              </button>
-            </div>
-            <small>先从常用模型里选；点击获取后会合并你当前 API 返回的模型。下拉没有时仍可手动填写。</small>
-          </div>
+          {!managedApi ? (
+            <>
+              <div className="field full">
+                <div className="model-field-header">
+                  <span>模型选择</span>
+                  <button type="button" className="ghost-btn small" disabled={loadingModels} onClick={() => void refreshModels()}>{loadingModels ? '获取中...' : '获取模型列表'}</button>
+                </div>
+                <small>先从常用模型里选；点击获取后会合并你当前 API 返回的模型。下拉没有时仍可手动填写。</small>
+              </div>
 
-          <label className="field">
-            <span>生图模型</span>
-            <select
-              value={selectValue(draft.model, imageModelOptions, customImageModelOpen)}
-              onChange={(e) => {
-                if (e.target.value === '__custom__') {
-                  setCustomImageModelOpen(true)
-                  return
-                }
-                setCustomImageModelOpen(false)
-                setDraft({ ...draft, model: e.target.value })
-              }}
-            >
-              {imageModelOptions.map((model) => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-              <option value="__custom__">自定义模型...</option>
-            </select>
-            {customImageModelOpen || !imageModelOptions.includes(draft.model) ? (
-              <input
-                value={draft.model}
-                placeholder="gpt-image-2"
-                onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              />
-            ) : null}
-          </label>
+              <label className="field">
+                <span>生图模型</span>
+                <select value={selectValue(draft.model, imageModelOptions, customImageModelOpen)} onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setCustomImageModelOpen(true)
+                    return
+                  }
+                  setCustomImageModelOpen(false)
+                  setDraft({ ...draft, model: e.target.value })
+                }}>
+                  {imageModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+                  <option value="__custom__">自定义模型...</option>
+                </select>
+                {customImageModelOpen || !imageModelOptions.includes(draft.model) ? <input value={draft.model} placeholder="gpt-image-2" onChange={(e) => setDraft({ ...draft, model: e.target.value })} /> : null}
+              </label>
 
-          <label className="field">
-            <span>提示词模型</span>
-            <select
-              value={selectValue(draft.promptModel, promptModelOptions, customPromptModelOpen)}
-              onChange={(e) => {
-                if (e.target.value === '__custom__') {
-                  setCustomPromptModelOpen(true)
-                  return
-                }
-                setCustomPromptModelOpen(false)
-                setDraft({ ...draft, promptModel: e.target.value })
-              }}
-            >
-              {promptModelOptions.map((model) => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-              <option value="__custom__">自定义模型...</option>
-            </select>
-            {customPromptModelOpen || !promptModelOptions.includes(draft.promptModel) ? (
-              <input
-                value={draft.promptModel}
-                placeholder="gpt-5.4-mini"
-                onChange={(e) => setDraft({ ...draft, promptModel: e.target.value })}
-              />
-            ) : null}
-          </label>
-          <label className="field">
-            <span>超时时间（秒）</span>
-            <input
-              type="number"
-              min={10}
-              max={900}
-              value={draft.timeoutSec}
-              onChange={(e) => setDraft({ ...draft, timeoutSec: Number(e.target.value) })}
-            />
-          </label>
+              <label className="field">
+                <span>提示词模型</span>
+                <select value={selectValue(draft.promptModel, promptModelOptions, customPromptModelOpen)} onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setCustomPromptModelOpen(true)
+                    return
+                  }
+                  setCustomPromptModelOpen(false)
+                  setDraft({ ...draft, promptModel: e.target.value })
+                }}>
+                  {promptModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+                  <option value="__custom__">自定义模型...</option>
+                </select>
+                {customPromptModelOpen || !promptModelOptions.includes(draft.promptModel) ? <input value={draft.promptModel} placeholder="gpt-5.4-mini" onChange={(e) => setDraft({ ...draft, promptModel: e.target.value })} /> : null}
+              </label>
+            </>
+          ) : null}
 
-          <label className="field">
-            <span>默认生成张数</span>
-            <input
-              type="number"
-              min={1}
-              max={12}
-              value={draft.count}
-              onChange={(e) => setDraft({ ...draft, count: Number(e.target.value) })}
-            />
-          </label>
+          <label className="field"><span>超时时间（秒）</span><input type="number" min={10} max={900} value={draft.timeoutSec} onChange={(e) => setDraft({ ...draft, timeoutSec: Number(e.target.value) })} /></label>
+          <label className="field"><span>默认生成张数</span><input type="number" min={1} max={12} value={draft.count} onChange={(e) => setDraft({ ...draft, count: Number(e.target.value) })} /></label>
+          <label className="field"><span>并发数</span><input type="number" min={1} max={6} value={draft.concurrency} onChange={(e) => setDraft({ ...draft, concurrency: Number(e.target.value) })} /></label>
 
-          <label className="field">
-            <span>并发数</span>
-            <input
-              type="number"
-              min={1}
-              max={6}
-              value={draft.concurrency}
-              onChange={(e) => setDraft({ ...draft, concurrency: Number(e.target.value) })}
-            />
-          </label>
-
-          <label className="check-field full">
-            <input
-              type="checkbox"
-              checked={showSecrets}
-              onChange={(e) => setShowSecrets(e.target.checked)}
-            />
-            显示密钥和令牌
-          </label>
-
-          <label className="check-field full">
-            <input
-              type="checkbox"
-              checked={draft.autoUploadPixhost}
-              onChange={(e) => setDraft({ ...draft, autoUploadPixhost: e.target.checked })}
-            />
-            生成成功后自动上传到 PiXhost 图床，结果图悬浮时可复制 URL
-          </label>
-          <small className="settings-note full">
-            自动上传会把生成图片发送到第三方图床；后台任务模式下结果始终会自动上传并只保存图床直链。
-          </small>
-
-          <label className="check-field full">
-            <input
-              type="checkbox"
-              checked={draft.rememberSecrets}
-              onChange={(e) => setDraft({ ...draft, rememberSecrets: e.target.checked })}
-            />
-            长期保存到 localStorage；关闭后只保存到当前会话 sessionStorage
-          </label>
+          {!managedApi ? <label className="check-field full"><input type="checkbox" checked={showSecrets} onChange={(e) => setShowSecrets(e.target.checked)} />显示密钥和令牌</label> : null}
+          <label className="check-field full"><input type="checkbox" checked={draft.autoUploadPixhost} onChange={(e) => setDraft({ ...draft, autoUploadPixhost: e.target.checked })} />生成成功后自动上传到 PiXhost 图床，结果图悬浮时可复制 URL</label>
+          <small className="settings-note full">自动上传会把生成图片发送到第三方图床；后台任务模式下结果始终会自动上传并只保存图床直链。</small>
+          <label className="check-field full"><input type="checkbox" checked={draft.rememberSecrets} onChange={(e) => setDraft({ ...draft, rememberSecrets: e.target.checked })} />长期保存到 localStorage；关闭后只保存到当前会话 sessionStorage</label>
         </div>
 
         <footer className="modal-actions">
@@ -333,4 +240,3 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
     </div>
   )
 }
-

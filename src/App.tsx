@@ -1,12 +1,12 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react'
-import type { AppSettings, AspectRatio, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier } from './types'
+import type { AppSettings, AspectRatio, BackgroundStats, BackgroundTask, GenerationTask, GenerateResultItem, HistoryItem, InputImage, Mode, ResolutionTier, RuntimeConfig } from './types'
 import { RatioPicker } from './components/RatioPicker'
 import { ResolutionPicker } from './components/ResolutionPicker'
 import { ImageUploader } from './components/ImageUploader'
 import { SettingsModal } from './components/SettingsModal'
 import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
-import { buildPromptDirect, buildPromptViaWorker, copyTextToClipboard, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
+import { buildPromptDirect, buildPromptViaWorker, copyTextToClipboard, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, getRuntimeConfig, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import {
@@ -45,6 +45,7 @@ export default function App() {
   const [historyCollapsed, setHistoryCollapsed] = useState(false)
   const [message, setMessage] = useState<Message>(null)
   const [backgroundStats, setBackgroundStats] = useState<BackgroundStats | null>(null)
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null)
   const [syncingCloudTasks, setSyncingCloudTasks] = useState(false)
   const uploadCacheRef = useRef(new Map<string, Map<number, UploadResult>>())
   const pollTimersRef = useRef(new Map<string, number>())
@@ -57,6 +58,7 @@ export default function App() {
 
   useEffect(() => {
     void refreshHistory()
+    void refreshRuntimeConfig()
     void refreshBackgroundStats()
   }, [])
 
@@ -181,6 +183,26 @@ export default function App() {
     saveSettings(normalized)
   }
 
+  async function refreshRuntimeConfig() {
+    try {
+      const config = await getRuntimeConfig()
+      setRuntimeConfig(config)
+      if (config.managedApi) {
+        updateSettings({
+          ...settingsRef.current,
+          requestMode: settingsRef.current.requestMode === 'direct' ? 'worker' : settingsRef.current.requestMode,
+          model: config.imageModel || settingsRef.current.model,
+          promptModel: config.promptModel || settingsRef.current.promptModel,
+        })
+      }
+    } catch {
+      setRuntimeConfig(null)
+    }
+  }
+
+  function isManagedApiEnabled() {
+    return runtimeConfig?.managedApi === true
+  }
   async function refreshHistory() {
     setHistory(await getHistory())
   }
@@ -368,9 +390,10 @@ export default function App() {
   }
 
   function validateBeforeBuildPrompt() {
-    if (!settings.baseUrl.trim()) return '请先填写 API URL'
-    if (!settings.apiKey.trim()) return '请先填写 API Key'
-    if (!settings.promptModel.trim()) return '请先填写提示词模型'
+    const managedApi = isManagedApiEnabled()
+    if (!managedApi && !settings.baseUrl.trim()) return '请先填写 API URL'
+    if (!managedApi && !settings.apiKey.trim()) return '请先填写 API Key'
+    if (!settings.promptModel.trim() && !runtimeConfig?.promptModel) return '请先填写提示词模型'
     if (!promptDraft.trim() && !prompt.trim()) return '请先输入一小段画面描述'
     if (settings.requestMode !== 'direct' && !isValidIdentityToken(settings.identityToken)) return `请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`
     return ''
@@ -392,12 +415,12 @@ export default function App() {
         mode,
         ratio,
         resolution,
-        targetModel: settings.model.trim(),
-        promptModel: settings.promptModel.trim(),
-        baseUrl: settings.baseUrl.trim(),
-        apiKey: settings.apiKey.trim(),
+        targetModel: isManagedApiEnabled() ? '' : settings.model.trim(),
+        promptModel: isManagedApiEnabled() ? '' : settings.promptModel.trim(),
+        baseUrl: isManagedApiEnabled() ? '' : settings.baseUrl.trim(),
+        apiKey: isManagedApiEnabled() ? '' : settings.apiKey.trim(),
       }
-      const response = settings.requestMode === 'direct'
+      const response = !isManagedApiEnabled() && settings.requestMode === 'direct'
         ? await buildPromptDirect(payload)
         : await buildPromptViaWorker(payload, settings.identityToken)
       setBuiltPrompt(response.prompt)
@@ -424,9 +447,10 @@ export default function App() {
   }
   function validateBeforeGenerate() {
     if (!isValidIdentityToken(settings.identityToken)) return `请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`
-    if (!settings.baseUrl.trim()) return '请先填写 API URL'
-    if (!settings.apiKey.trim()) return '请先填写 API Key'
-    if (!settings.model.trim()) return '请先填写模型名称'
+    const managedApi = isManagedApiEnabled()
+    if (!managedApi && !settings.baseUrl.trim()) return '请先填写 API URL'
+    if (!managedApi && !settings.apiKey.trim()) return '请先填写 API Key'
+    if (!settings.model.trim() && !runtimeConfig?.imageModel) return '请先填写模型名称'
     if (!prompt.trim()) return '请输入提示词'
     if (mode === 'image-to-image' && inputImages.length === 0) return '图生图模式需要先上传参考图'
     return ''
@@ -450,9 +474,9 @@ export default function App() {
       prompt: prompt.trim(),
       ratio,
       resolution,
-      model: settings.model.trim(),
-      baseUrl: settings.baseUrl.trim(),
-      apiKey: settings.apiKey.trim(),
+      model: isManagedApiEnabled() ? '' : settings.model.trim(),
+      baseUrl: isManagedApiEnabled() ? '' : settings.baseUrl.trim(),
+      apiKey: isManagedApiEnabled() ? '' : settings.apiKey.trim(),
       timeoutSec: settings.timeoutSec,
       count: settings.count,
       concurrency: settings.concurrency,
@@ -474,7 +498,7 @@ export default function App() {
       ratio,
       resolution,
       size,
-      model: payload.model,
+      model: isManagedApiEnabled() ? (runtimeConfig?.imageModel || settings.model) : payload.model,
       count: payload.count,
       concurrency: payload.concurrency,
       status: 'running',
@@ -540,7 +564,7 @@ export default function App() {
           uploadPromises.push(uploadGeneratedResult(taskId, result, identityToken))
         }
       }
-      const response = requestMode === 'direct'
+      const response = !isManagedApiEnabled() && requestMode === 'direct'
         ? await generateImagesDirect(payload, handleResult)
         : await generateImagesStream(payload, identityToken, (event) => {
             if (event.event === 'result') handleResult(event.data)
@@ -668,7 +692,7 @@ export default function App() {
       showMessage(`重试后台任务需要先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`, 'error')
       return
     }
-    if (!settings.apiKey.trim()) {
+    if (!isManagedApiEnabled() && !settings.apiKey.trim()) {
       showMessage('重试后台任务需要当前浏览器里的 API Key', 'error')
       setSettingsOpen(true)
       return
@@ -678,11 +702,11 @@ export default function App() {
       const cloudTask = await retryBackgroundTask(
         taskId,
         {
-          apiKey: settings.apiKey.trim(),
-          baseUrl: settings.baseUrl.trim(),
+          apiKey: isManagedApiEnabled() ? '' : settings.apiKey.trim(),
+          baseUrl: isManagedApiEnabled() ? '' : settings.baseUrl.trim(),
           timeoutSec: settings.timeoutSec,
           concurrency: settings.concurrency,
-          model: settings.model.trim(),
+          model: isManagedApiEnabled() ? '' : settings.model.trim(),
         },
         identityToken,
       )
@@ -846,8 +870,8 @@ export default function App() {
           </div>
         </div>
         <div className="top-actions">
-          <div className="config-pill" title={settings.baseUrl}>
-            <span>{getRequestModeLabel(settings.requestMode)}</span>
+          <div className="config-pill" title={isManagedApiEnabled() ? '服务端托管 API' : settings.baseUrl}>
+            <span>{isManagedApiEnabled() ? '服务端托管' : getRequestModeLabel(settings.requestMode)}</span>
           </div>
           <button type="button" className="secondary-btn" onClick={() => setSettingsOpen(true)}>设置</button>
         </div>
@@ -922,8 +946,8 @@ export default function App() {
               <label className="label">生图模型 Engine</label>
               <button type="button" className="text-link-btn" onClick={() => setSettingsOpen(true)}>设置</button>
             </div>
-            <div className="readonly-value" title={settings.model || '未设置'}>
-              {settings.model || '未设置'}
+            <div className="readonly-value" title={isManagedApiEnabled() ? (runtimeConfig?.imageModel || '服务端托管') : (settings.model || '未设置')}>
+              {isManagedApiEnabled() ? (runtimeConfig?.imageModel || '服务端托管') : (settings.model || '未设置')}
             </div>
           </section>
           <section className="panel">
@@ -1020,9 +1044,9 @@ export default function App() {
         settings={settings}
         onClose={() => setSettingsOpen(false)}
         onSave={updateSettings}
+        runtimeConfig={runtimeConfig}
         onMessage={showMessage}
       />
     </div>
   )
 }
-

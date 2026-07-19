@@ -8,6 +8,11 @@ interface Env {
   ALLOW_HTTP_API?: string
   ALLOW_PRIVATE_HOSTS?: string
   SITE_ACCESS_PASSWORD?: string
+  SW_SITE_ACCESS_PASSWORD?: string
+  SW_UPSTREAM_API_KEY?: string
+  SW_UPSTREAM_BASE_URL?: string
+  SW_IMAGE_MODEL?: string
+  SW_PROMPT_MODEL?: string
 }
 
 type Mode = 'text-to-image' | 'image-to-image'
@@ -236,6 +241,11 @@ export default {
 
     const siteAccess = await requireSiteAccess(request, env, url)
     if (siteAccess) return siteAccess
+
+    if (url.pathname === '/api/runtime-config') {
+      if (request.method !== 'GET') return jsonError('bad_request', '仅支持 GET 请求', 405)
+      return handleRuntimeConfig(env)
+    }
 
     if (url.pathname === '/api/health') {
       return json({ ok: true, message: 'Worker is ready', background: Boolean(env.DB && env.IMAGE_WORKFLOW) })
@@ -499,8 +509,8 @@ async function handleRetryBackgroundTask(taskId: string, request: Request, env: 
   }
 
   const stored = parseStoredRequest(row.request_json)
-  const apiKey = String(payload.apiKey || '').trim()
-  if (!apiKey) return jsonError('invalid_config', '重试后台任务需要当前浏览器重新提供 API Key，Worker 不会把 Key 存入 D1', 400)
+  const apiKey = getUpstreamApiKey(payload.apiKey, env)
+  if (!apiKey) return jsonError('invalid_config', '重试后台任务需要配置 SW_UPSTREAM_API_KEY 或重新提供 API Key', 400)
 
   try {
     const retryId = createTaskId('retry')
@@ -511,8 +521,8 @@ async function handleRetryBackgroundTask(taskId: string, request: Request, env: 
       ratio: stored.ratio,
       resolution: stored.resolution,
       size: getImageSize(stored.ratio, stored.resolution),
-      model: String(payload.model || stored.model || '').trim(),
-      baseUrl: normalizeBaseUrl(String(payload.baseUrl || stored.baseUrl || '').trim(), env),
+      model: String(payload.model || stored.model || getConfiguredImageModel(env)).trim(),
+      baseUrl: getUpstreamBaseUrl(payload.baseUrl || stored.baseUrl, env),
       apiKey,
       timeoutSec: clamp(Number(payload.timeoutSec ?? stored.timeoutSec), 10, 900, stored.timeoutSec || 420),
       count: clamp(Number(stored.count), 1, 12, 1),
@@ -609,6 +619,44 @@ async function handleListBackgroundTasks(request: Request, env: Env, ownerHash: 
   return json({ ok: true, tasks: (rows.results || []).map(taskFromRow) })
 }
 
+function handleRuntimeConfig(env: Env) {
+  const imageModel = getConfiguredImageModel(env)
+  const promptModel = getConfiguredPromptModel(env)
+  const baseUrlConfigured = Boolean(getConfiguredBaseUrl(env))
+  const apiKeyConfigured = Boolean(getConfiguredApiKey(env))
+  return json({
+    ok: true,
+    managedApi: baseUrlConfigured && apiKeyConfigured,
+    baseUrlConfigured,
+    apiKeyConfigured,
+    imageModel,
+    promptModel,
+  })
+}
+
+function getConfiguredBaseUrl(env: Env) {
+  return String(env.SW_UPSTREAM_BASE_URL || '').trim()
+}
+
+function getConfiguredApiKey(env: Env) {
+  return String(env.SW_UPSTREAM_API_KEY || '').trim()
+}
+
+function getConfiguredImageModel(env: Env) {
+  return String(env.SW_IMAGE_MODEL || 'gpt-image-2').trim()
+}
+
+function getConfiguredPromptModel(env: Env) {
+  return String(env.SW_PROMPT_MODEL || 'gpt-5.4-mini').trim()
+}
+
+function getUpstreamBaseUrl(payloadValue: unknown, env: Env) {
+  return normalizeBaseUrl(String(payloadValue || getConfiguredBaseUrl(env) || '').trim(), env)
+}
+
+function getUpstreamApiKey(payloadValue: unknown, env: Env) {
+  return String(payloadValue || getConfiguredApiKey(env) || '').trim()
+}
 async function handleStats(env: Env, ownerHash: string) {
   const bindingError = ensureDbBinding(env)
   if (bindingError) return bindingError
@@ -630,10 +678,10 @@ async function handleModelList(request: Request, env: Env) {
     return jsonError('bad_request', '请求体不是有效 JSON', 400)
   }
 
-  const apiKey = String(payload.apiKey || '').trim()
+  const apiKey = getUpstreamApiKey(payload.apiKey, env)
   let baseUrl = ''
   try {
-    baseUrl = normalizeBaseUrl(String(payload.baseUrl || '').trim(), env)
+    baseUrl = getUpstreamBaseUrl(payload.baseUrl, env)
   } catch (error) {
     return jsonError('invalid_config', error instanceof Error ? error.message : 'API URL 无效', 400)
   }
@@ -671,16 +719,16 @@ async function handlePromptPolish(request: Request, env: Env) {
   }
 
   const description = String(payload.description || '').trim()
-  const promptModel = String(payload.promptModel || '').trim()
-  const targetModel = String(payload.targetModel || '').trim()
-  const apiKey = String(payload.apiKey || '').trim()
+  const promptModel = String(payload.promptModel || getConfiguredPromptModel(env)).trim()
+  const targetModel = String(payload.targetModel || getConfiguredImageModel(env)).trim()
+  const apiKey = getUpstreamApiKey(payload.apiKey, env)
   const mode = payload.mode === 'image-to-image' ? 'image-to-image' : 'text-to-image'
   const ratio = isRatio(payload.ratio) ? payload.ratio : 'auto'
   const resolution = isResolution(payload.resolution) ? payload.resolution : 'standard'
   let baseUrl = ''
 
   try {
-    baseUrl = normalizeBaseUrl(String(payload.baseUrl || '').trim(), env)
+    baseUrl = getUpstreamBaseUrl(payload.baseUrl, env)
   } catch (error) {
     return jsonError('invalid_config', error instanceof Error ? error.message : 'API URL 无效', 400)
   }
@@ -870,7 +918,7 @@ function handleSiteAccessLogout(url: URL) {
 }
 
 async function getConfiguredSiteAccessHash(env: Env) {
-  const password = String(env.SITE_ACCESS_PASSWORD || '').trim()
+  const password = String(env.SW_SITE_ACCESS_PASSWORD || env.SITE_ACCESS_PASSWORD || '').trim()
   return password ? hashSiteAccessPassword(password) : ''
 }
 
@@ -1090,9 +1138,9 @@ function normalizePayload(payload: GeneratePayload, env: Env): NormalizedPayload
   const rawRatio = isRatio(payload.ratio) ? payload.ratio : 'auto'
   const ratio = resolution === 'auto' ? rawRatio : rawRatio === 'auto' ? '1:1' : rawRatio
   const size = getImageSize(ratio, resolution)
-  const model = String(payload.model || '').trim()
-  const baseUrl = normalizeBaseUrl(String(payload.baseUrl || '').trim(), env)
-  const apiKey = String(payload.apiKey || '').trim()
+  const model = String(payload.model || getConfiguredImageModel(env)).trim()
+  const baseUrl = getUpstreamBaseUrl(payload.baseUrl, env)
+  const apiKey = getUpstreamApiKey(payload.apiKey, env)
   const timeoutSec = clamp(Number(payload.timeoutSec), 10, 900, 420)
   const count = clamp(Number(payload.count), 1, 12, 1)
   const concurrency = clamp(Number(payload.concurrency), 1, 6, 2)
