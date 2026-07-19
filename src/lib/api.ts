@@ -6,6 +6,8 @@ import type {
   GenerateRequest,
   GenerateResultItem,
   GenerateSuccessResponse,
+  PromptBuilderRequest,
+  PromptBuilderResponse,
   InputImage,
   StreamEvent,
 } from '../types'
@@ -33,6 +35,115 @@ export function fileToInputImage(file: File): Promise<InputImage> {
   })
 }
 
+export async function listModelsDirect(baseUrl: string, apiKey: string): Promise<string[]> {
+  const normalizedBaseUrl = normalizeBaseUrlForBrowser(baseUrl)
+  const response = await fetch(buildUpstreamUrl(normalizedBaseUrl, 'models'), {
+    headers: {
+      Authorization: `Bearer ${apiKey.trim()}`,
+      'Cache-Control': 'no-store',
+    },
+  })
+  if (!response.ok) throw new Error(await readUpstreamError(response))
+  return parseModelIds(await response.json())
+}
+
+export async function listModelsViaWorker(baseUrl: string, apiKey: string, identityToken: string): Promise<string[]> {
+  const data = await postJson<{ ok?: boolean; models?: string[]; message?: string }>(
+    '/api/models',
+    { baseUrl, apiKey },
+    identityToken,
+  )
+  if (!data.ok || !data.models) throw new Error(data.message || '获取模型列表失败')
+  return data.models
+}
+
+function parseModelIds(payload: unknown) {
+  const data = (payload as { data?: unknown })?.data
+  if (!Array.isArray(data)) return []
+  return data
+    .map((item) => typeof item === 'string' ? item : typeof (item as { id?: unknown })?.id === 'string' ? (item as { id: string }).id : '')
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+}
+export async function buildPromptDirect(payload: PromptBuilderRequest): Promise<PromptBuilderResponse> {
+  const normalizedPayload = {
+    ...payload,
+    baseUrl: normalizeBaseUrlForBrowser(payload.baseUrl),
+    description: payload.description.trim(),
+    promptModel: payload.promptModel.trim(),
+    targetModel: payload.targetModel.trim(),
+  }
+  if (!normalizedPayload.description) throw new Error('请先输入一小段画面描述')
+  if (!normalizedPayload.promptModel) throw new Error('请先填写提示词模型')
+  if (!normalizedPayload.apiKey.trim()) throw new Error('请先填写 API Key')
+
+  const response = await fetch(buildUpstreamUrl(normalizedPayload.baseUrl, 'chat/completions'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${normalizedPayload.apiKey.trim()}`,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
+    body: JSON.stringify(createPromptBuilderChatBody(normalizedPayload)),
+  })
+
+  if (!response.ok) throw new Error(await readUpstreamError(response))
+  const parsed = await response.json() as Record<string, unknown>
+  return parsePromptBuilderResponse(parsed, normalizedPayload.promptModel)
+}
+
+export async function buildPromptViaWorker(
+  payload: PromptBuilderRequest,
+  identityToken: string,
+): Promise<PromptBuilderResponse> {
+  return postJson<PromptBuilderResponse>('/api/prompt-polish', payload, identityToken)
+}
+
+function createPromptBuilderChatBody(payload: PromptBuilderRequest) {
+  return {
+    model: payload.promptModel,
+    temperature: 0.75,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are a senior AI image prompt designer.',
+          'Expand the user\'s short visual idea into one production-ready image generation prompt.',
+          'Return only the final prompt text, no Markdown, no quotes, no headings, no explanations.',
+          'Use concise natural language with concrete visual details: subject, composition, environment, lighting, style, mood, camera/framing, materials, color palette, and quality cues.',
+          'Avoid mentioning policy, safety, or that you are an AI.',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: [
+          `Short idea: ${payload.description}`,
+          `Generation mode: ${payload.mode === 'image-to-image' ? 'image reference / edit' : 'text to image'}`,
+          `Target image model: ${payload.targetModel || 'unknown'}`,
+          `Aspect ratio: ${payload.ratio}`,
+          `Resolution tier: ${payload.resolution}`,
+          'Write the prompt in the same language as the short idea unless English would clearly improve model comprehension.',
+        ].join('\n'),
+      },
+    ],
+  }
+}
+
+function parsePromptBuilderResponse(parsed: Record<string, unknown>, model: string): PromptBuilderResponse {
+  const choices = parsed.choices
+  if (!Array.isArray(choices) || !choices.length) throw new Error('提示词模型没有返回内容')
+  const first = choices[0] as Record<string, unknown>
+  const message = first.message as Record<string, unknown> | undefined
+  const content = typeof message?.content === 'string'
+    ? message.content
+    : typeof first.text === 'string'
+      ? first.text
+      : ''
+  const prompt = content.trim().replace(/^```(?:\w+)?\s*/i, '').replace(/```$/i, '').trim()
+  if (!prompt) throw new Error('提示词模型返回为空')
+  return { ok: true, prompt, model }
+}
 export async function generateImagesStream(
   payload: GenerateRequest,
   identityToken: string,
@@ -264,6 +375,12 @@ export function getImageProxyUrl(src: string) {
   if (!/^https?:\/\//i.test(src) && !src.startsWith('//')) return src
   const normalized = src.startsWith('//') ? `${window.location.protocol}${src}` : src
   return `/api/image-proxy?url=${encodeURIComponent(normalized)}`
+}
+
+export async function imageSourceToDataUrl(src: string) {
+  if (src.startsWith('data:image/')) return src
+  const blob = await fetchImageBlob(src)
+  return blobToDataUrl(blob, blob.type || 'image/png')
 }
 
 function identityHeaders(identityToken?: string): Record<string, string> {

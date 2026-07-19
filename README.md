@@ -1,12 +1,12 @@
 # AI Image Generate
 
 <p align="center">
-  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/y08lin4/AI-Image-generate">
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/xwspretty/AI-Image-generate">
     <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" />
   </a>
 </p>
 
-轻量级 AI 生图工作台：前端配置自定义 API URL / Key，Cloudflare Worker 负责代理请求，支持文生图、图生图、多图生成、多任务队列、超时、比例、分辨率档位、放大预览、本地历史、PiXhost 图床上传和友好错误提示。
+轻量级 AI 生图工作台：前端配置自定义 API URL / Key，Cloudflare Worker 负责代理请求，支持文生图、图生图、短描述生成提示词、模型列表获取、多图生成、多任务队列、超时、比例、分辨率档位、适配预览、本地历史、PiXhost 图床上传和友好错误提示。
 
 ## 功能
 
@@ -15,15 +15,17 @@
 - 会拒绝过于简单的空间密码，例如连续数字、重复字符、重复片段、键盘顺序、常见弱密码词和明显日期。
 - Worker 接口不再使用单独访问密码，统一通过空间密码派生出的访问令牌校验。
 - 支持三种请求方式：`Worker 流式代理`、`Worker 后台任务` 和 `浏览器直连`。
-- 支持文生图与图生图，图生图可上传多张参考图。
+- 支持文生图与图生图，图生图可上传多张参考图；生成结果和历史图片也可以一键加入参考图。
+- 支持短描述生成完整提示词，可复制或直接填入主提示词。
+- 支持从当前 API 获取模型列表，设置页会过滤出常用生图模型和 mini 系提示词模型。
 - 支持一次生成多张：按并发数拆成多个单图请求，完成一张展示一张。
 - 支持多任务队列：任务提交后页面可以继续提交新任务。
 - 支持 Worker 后台任务模式：任务由 Cloudflare Workflows 执行，D1 保存任务状态和 PiXhost 图片直链；App/WebView 切后台后，回到前台会自动恢复任务。
 - 支持比例：`自动`、`1:1`、`2:3`、`3:2`、`3:4`、`4:3`、`9:16`、`16:9`。
 - 支持分辨率档位：`自动`、`标准`、`2K`、`4K`。
-- 支持生成结果操作：下载、复制到剪贴板、作为图生图参考图、全屏放大预览。
+- 支持生成结果操作：下载、复制到剪贴板、作为图生图参考图、适配预览和全屏细节查看。
 - App / WebView 下的图床图片展示、下载、复制会走 Worker 图片代理，避免 PiXhost 直链跳转和 CORS 导致的复制失败。
-- 全屏预览已抽离为独立组件，会读取图片真实尺寸，显示实际像素尺寸、实际宽高比和图片文件大小，并支持在预览里复制图片 / URL。
+- 图片预览已抽离为独立组件，默认完整适配显示；点击图片进入全屏细节查看，可滚动查看大图，并支持复制图片 / URL。
 - 支持自动上传或单张手动上传生成图到 PiXhost 图床；自动上传可关闭，手动上传可在图片悬浮时点击「上传图床」。
 - 上传失败后图片悬浮按钮会显示「重试上传」；上传成功后可复制 PiXhost 图片直链 URL。
 - 后台任务支持失败后重试、按空间密码隔离的云端任务列表同步，并显示当前身份空间的「今日已生成」与「累计已生成」统计。
@@ -165,7 +167,7 @@ image[]
 
 点击上方 **Deploy to Cloudflare** 按钮即可从 GitHub 仓库创建 Cloudflare Worker。部署后打开站点，自行设置至少 10 位复杂空间密码即可进入对应云端任务空间。
 
-> 注意：按钮依赖 GitHub 上的当前仓库内容。第一次使用前，需要先把代码提交并推送到 `https://github.com/y08lin4/AI-Image-generate`。
+> 注意：按钮依赖 GitHub 上的当前仓库内容。第一次使用前，需要先把代码提交并推送到 `https://github.com/xwspretty/AI-Image-generate`。
 
 ## 本地开发
 
@@ -211,7 +213,7 @@ npm run worker:deploy
 - 空间密码：至少 10 位，建议包含大小写字母、数字和符号；多设备输入同一个密码即可同步同一个云端任务空间
 - API URL：例如 `https://api.openai.com/v1`
 - API Key：你的上游 API Key
-- 模型：例如 `gpt-image-2`
+- 生图模型：默认 `gpt-image-2`；提示词模型：默认 `gpt-5.4-mini`，也可以在设置页获取模型列表后选择
 - 请求方式：默认选 `Worker 流式代理`；App 长任务建议选 `Worker 后台任务`；如果上游支持 CORS，可以改成 `浏览器直连`
 
 ## 安全说明
@@ -222,3 +224,5 @@ npm run worker:deploy
 - 浏览器只保存不可逆派生后的访问令牌，Worker/D1 只保存归属 hash，不保存明文空间密码。
 - 默认阻止代理 localhost、内网 IP 和 metadata 地址。
 - 如果不想允许 HTTP API，把 `ALLOW_HTTP_API` 改成 `false`。
+
+

@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Image Generate - Studio Workspace</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        
+        /* Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e4e4e7; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #d4d4d8; }
+        
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideInFromTop { from { transform: translateY(-1rem); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes slideInFromBottom { from { transform: translateY(1rem); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes slideInFromRight { from { transform: translateX(1rem); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        
+        .animate-fade-in { animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-slide-top { animation: slideInFromTop 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-slide-bottom { animation: slideInFromBottom 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-slide-right { animation: slideInFromRight 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .animate-spin-slow { animation: spin 2s linear infinite; }
+        
+        /* Hide element utility */
+        .hidden-view { display: none !important; }
+    </style>
+</head>
+<body class="bg-[#FAFAFA] text-zinc-900 overflow-hidden h-screen flex flex-col selection:bg-zinc-200 selection:text-zinc-900">
+
+    <div id="auth-screen" class="min-h-screen bg-[#FAFAFA] flex items-center justify-center p-4 w-full absolute inset-0 z-[100]">
+        <div class="w-full max-w-[360px] bg-white p-8 rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.04)] border border-zinc-200/60 animate-slide-bottom">
+            <div class="flex justify-center mb-6">
+                <div class="w-12 h-12 bg-zinc-900 rounded-xl flex items-center justify-center text-white shadow-sm">
+                    <i data-lucide="lock" class="w-5 h-5"></i>
+                </div>
+            </div>
+            <h1 class="text-xl font-bold text-center mb-2 tracking-tight">进入私人工作台</h1>
+            <p class="text-[13px] text-zinc-500 text-center mb-8 leading-relaxed">
+                请输入您的隔离空间密码。<br/>凭据仅用于本地派生，绝不明文上传。
+            </p>
+            <form id="login-form" class="space-y-4">
+                <div>
+                    <input type="password" id="password-input" placeholder="输入 10 位以上空间密码" class="w-full bg-white border border-zinc-200 rounded-lg px-3.5 py-3 text-[14px] focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all placeholder:text-zinc-400" autofocus>
+                </div>
+                <div id="login-error" class="hidden-view text-rose-600 text-[12px] flex items-center gap-1.5 font-medium">
+                    <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+                    <span>空间密码至少需要 10 个字符</span>
+                </div>
+                <button type="submit" class="w-full bg-zinc-900 hover:bg-zinc-800 active:scale-[0.98] text-white font-medium rounded-lg px-4 py-3 text-[14px] transition-all flex items-center justify-center gap-2">
+                    安全进入
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div id="main-app" class="hidden-view flex flex-col h-screen w-full relative">
+        
+        <!-- Top Navbar -->
+        <header class="h-12 bg-white border-b border-zinc-200 flex items-center justify-between px-4 shrink-0 z-10">
+            <div class="flex items-center gap-3">
+                <div class="flex items-center justify-center text-zinc-900 bg-[#FAFAFA] w-7 h-7 rounded-md border border-zinc-200">
+                    <i data-lucide="palette" class="w-4 h-4"></i>
+                </div>
+                <span class="font-semibold tracking-tight text-[14px]">Studio Workspace</span>
+                <div class="h-4 w-px bg-zinc-200 mx-2"></div>
+                <!-- Status Badge -->
+                <div class="flex items-center gap-1.5 px-2 py-1 bg-[#FAFAFA] rounded border border-zinc-200">
+                    <i data-lucide="server" class="w-3 h-3 text-zinc-500" id="header-mode-icon"></i>
+                    <span class="text-[11px] text-zinc-600 font-medium" id="header-mode-text">Worker 流式代理</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-1.5">
+                <button id="toggle-history-btn" class="p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 rounded-md transition-colors" title="历史记录">
+                    <i data-lucide="history" class="w-4 h-4"></i>
+                </button>
+                <button id="open-settings-btn" class="p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 rounded-md transition-colors" title="工作台设置">
+                    <i data-lucide="settings" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace Area -->
+        <div class="flex flex-1 overflow-hidden">
+            
+            <aside class="w-[320px] bg-white border-r border-zinc-200 flex flex-col shrink-0 z-10">
+                <!-- Mode Switcher -->
+                <div class="p-4 pb-0">
+                    <div class="flex bg-[#FAFAFA] rounded-lg p-0.5 border border-zinc-200">
+                        <button id="mode-t2i" class="flex-1 py-1.5 text-[12px] font-medium rounded-md transition-all bg-white text-zinc-900 shadow-sm border border-zinc-200/50">文本生成 (T2I)</button>
+                        <button id="mode-i2i" class="flex-1 py-1.5 text-[12px] font-medium rounded-md transition-all text-zinc-500 hover:text-zinc-700">图像参考 (I2I)</button>
+                    </div>
+                </div>
+
+                <!-- Scrollable Controls -->
+                <div class="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
+                    
+                    <!-- Prompt Area -->
+                    <div class="space-y-2">
+                        <label class="text-[11px] font-bold text-zinc-500 uppercase tracking-wider block">画面描述 Prompt</label>
+                        <textarea id="prompt-input" class="w-full h-32 bg-[#FAFAFA] border border-zinc-200 rounded-lg p-3 text-[13px] text-zinc-800 focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 focus:bg-white focus:outline-none resize-none transition-all placeholder:text-zinc-400" placeholder="描述您构思的画面细节..."></textarea>
+                    </div>
+
+                    <!-- Reference Images (Hidden by default) -->
+                    <div id="ref-image-section" class="hidden-view space-y-2">
+                        <div class="flex justify-between items-end">
+                            <label class="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">参考图像 References</label>
+                            <span class="text-[10px] text-zinc-400 font-mono" id="ref-count">0/8</span>
+                        </div>
+                        <div class="grid grid-cols-4 gap-2" id="ref-images-container">
+                            <!-- Upload Button (always last) -->
+                            <label id="upload-ref-btn" class="relative aspect-square rounded-lg border border-dashed border-zinc-300 hover:border-zinc-500 flex flex-col items-center justify-center cursor-pointer transition-colors bg-[#FAFAFA] hover:bg-zinc-50 text-zinc-400 group">
+                                <i data-lucide="plus" class="w-4 h-4 mb-1 group-hover:text-zinc-600 transition-colors"></i>
+                                <span class="text-[9px] font-medium">添加</span>
+                                <input type="file" id="file-upload" multiple accept="image/png, image/jpeg, image/webp" class="hidden">
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Aspect Ratio Visualizer -->
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-end">
+                            <label class="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">画面比例 Aspect Ratio</label>
+                            <span class="text-[10px] text-zinc-400 font-mono" id="current-ar-text">1:1</span>
+                        </div>
+                        <div class="grid grid-cols-4 gap-2" id="aspect-ratio-grid">
+                            <!-- Generated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Resolution & Settings -->
+                    <div class="space-y-4 pt-4 border-t border-zinc-100">
+                        <div>
+                            <label class="text-[11px] font-bold text-zinc-500 mb-1.5 block uppercase tracking-wider">物理分辨率 Resolution</label>
+                            <div class="relative">
+                                <select id="resolution-select" class="w-full bg-white border border-zinc-200 rounded-lg py-2 pl-3 pr-8 text-[12px] font-medium text-zinc-800 appearance-none focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-all">
+                                    <option value="auto">自动尺寸 (模型决定)</option>
+                                    <option value="standard">标准尺寸 (1024)</option>
+                                    <option value="2k">高分辨率 (2048)</option>
+                                    <option value="4k">极高分辨 (4K 耗时)</option>
+                                </select>
+                                <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-zinc-400 absolute right-3 top-2.5 pointer-events-none"></i>
+                            </div>
+                        </div>
+                        
+                        <div id="4k-warning" class="hidden-view text-[11px] text-zinc-600 bg-[#FAFAFA] border border-zinc-200 p-2.5 rounded-lg flex items-start gap-2">
+                            <i data-lucide="alert-triangle" class="w-3.5 h-3.5 shrink-0 mt-0.5 text-zinc-400"></i>
+                            <span class="leading-tight">4K 耗时极长易超时，建议切换后台任务模式执行。</span>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="bg-[#FAFAFA] p-3 rounded-lg border border-zinc-200">
+                                <label class="text-[11px] font-bold text-zinc-500 flex justify-between mb-2 uppercase tracking-wider"><span>生成张数</span> <span id="count-display" class="text-zinc-900 font-mono">1</span></label>
+                                <input type="range" id="count-input" min="1" max="12" value="1" class="w-full accent-zinc-900 h-1 bg-zinc-200 rounded-lg appearance-none cursor-pointer outline-none">
+                            </div>
+                            <div class="bg-[#FAFAFA] p-3 rounded-lg border border-zinc-200">
+                                <label class="text-[11px] font-bold text-zinc-500 block mb-1.5 uppercase tracking-wider">任务并发</label>
+                                <div class="relative">
+                                    <select id="concurrency-select" class="w-full bg-transparent text-[12px] font-medium text-zinc-800 appearance-none focus:outline-none">
+                                        <option value="1">1 并发</option><option value="2">2 并发</option>
+                                        <option value="3">3 并发</option><option value="4">4 并发</option>
+                                        <option value="5">5 并发</option><option value="6">6 并发</option>
+                                    </select>
+                                    <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-zinc-400 absolute right-0 top-0.5 pointer-events-none"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Generate Button -->
+                <div class="p-4 bg-white border-t border-zinc-200 shrink-0">
+                    <button id="generate-btn" class="w-full py-3 bg-zinc-900 hover:bg-zinc-800 active:scale-[0.98] text-white disabled:bg-[#FAFAFA] disabled:text-zinc-400 disabled:border disabled:border-zinc-200 disabled:cursor-not-allowed font-medium rounded-lg text-[13px] transition-all flex items-center justify-center gap-2 group">
+                        <i data-lucide="sparkles" class="w-4 h-4 group-disabled:opacity-50"></i>
+                        发起生成请求
+                    </button>
+                    <div class="text-center text-[10px] text-zinc-400 mt-2 font-mono flex justify-center items-center gap-1">
+                        Engine: <span class="font-medium text-zinc-500" id="engine-display">gpt-image-2</span>
+                    </div>
+                </div>
+            </aside>
+
+            <main class="flex-1 overflow-y-auto custom-scrollbar relative bg-[#FAFAFA]">
+                <!-- Empty State -->
+                <div id="empty-state" class="absolute inset-0 flex flex-col items-center justify-center text-zinc-400 animate-fade-in">
+                    <div class="w-16 h-16 bg-white rounded-2xl shadow-sm border border-zinc-200 flex items-center justify-center mb-4">
+                        <i data-lucide="command" class="w-6 h-6 text-zinc-300"></i>
+                    </div>
+                    <h2 class="text-[14px] font-medium text-zinc-600 mb-1">工作台就绪</h2>
+                    <p class="text-[12px] text-center text-zinc-400 max-w-[260px] leading-relaxed">
+                        在左侧配置参数并描述画面，点击生成即可开始创作。
+                    </p>
+                </div>
+                
+                <!-- Task Queue Container -->
+                <div id="tasks-container" class="p-6 space-y-6 max-w-[1600px] mx-auto pb-24 relative z-10">
+                    <!-- Tasks injected by JS -->
+                </div>
+            </main>
+
+            <aside id="history-sidebar" class="hidden-view w-[280px] bg-white border-l border-zinc-200 flex-col shrink-0 z-20 shadow-[-4px_0_24px_rgba(0,0,0,0.02)] animate-slide-right">
+                <div class="px-4 py-3 border-b border-zinc-100 flex justify-between items-center bg-white">
+                    <h3 class="text-[13px] font-semibold text-zinc-800 flex items-center gap-2">
+                        <i data-lucide="history" class="w-3.5 h-3.5 text-zinc-400"></i> 历史记录
+                    </h3>
+                    <button id="close-history-btn" class="p-1.5 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-md transition-colors">
+                        <i data-lucide="panel-right-close" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+                <div id="history-container" class="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar bg-[#FAFAFA]">
+                    <!-- History empty state -->
+                    <div id="history-empty" class="text-center flex flex-col items-center justify-center mt-10">
+                        <div class="w-10 h-10 bg-white rounded-full border border-zinc-200 flex items-center justify-center text-zinc-300 mb-2 shadow-sm">
+                            <i data-lucide="history" class="w-4 h-4"></i>
+                        </div>
+                        <div class="text-[11px] font-medium text-zinc-400">暂无本地记录</div>
+                    </div>
+                    <!-- History items injected by JS -->
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden-view fixed inset-0 bg-zinc-950/40 z-[150] flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
+        <div class="bg-white rounded-2xl w-full max-w-[600px] max-h-[85vh] overflow-hidden shadow-2xl flex flex-col animate-slide-bottom">
+            <div class="px-6 py-4 border-b border-zinc-100 flex justify-between items-center bg-white z-10">
+                <h2 class="text-[15px] font-semibold text-zinc-900 flex items-center gap-2">
+                    <i data-lucide="settings" class="w-4 h-4 text-zinc-500"></i> 工作台首选项
+                </h2>
+                <button id="close-settings-btn" class="p-1.5 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-md transition-colors">
+                    <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+            </div>
+            
+            <div class="p-6 space-y-8 overflow-y-auto flex-grow custom-scrollbar">
+                <!-- API Config -->
+                <section class="space-y-4">
+                    <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">接口配置</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-[13px] font-medium text-zinc-700 mb-1.5">上游 API URL</label>
+                            <input type="text" id="set-apiurl" value="https://api.openai.com/v1" class="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-[13px] focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 focus:outline-none transition-all">
+                        </div>
+                        <div>
+                            <label class="block text-[13px] font-medium text-zinc-700 mb-1.5">API Key <span class="text-zinc-400 font-normal ml-1">(仅本地保留)</span></label>
+                            <input type="password" id="set-apikey" placeholder="sk-..." class="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-[13px] focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 focus:outline-none transition-all">
+                        </div>
+                        <div>
+                            <label class="block text-[13px] font-medium text-zinc-700 mb-1.5">默认模型</label>
+                            <input type="text" id="set-model" value="gpt-image-2" class="w-full bg-white border border-zinc-200 rounded-lg px-3 py-2 text-[13px] focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 focus:outline-none transition-all">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Engine Config -->
+                <section class="space-y-4">
+                    <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">任务引擎</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3" id="engine-options">
+                        <div class="engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-zinc-900 border-zinc-900 text-white" data-mode="stream">
+                            <div class="flex items-center gap-2 mb-1.5">
+                                <i data-lucide="server" class="w-4 h-4 text-zinc-300"></i>
+                                <span class="text-[13px] font-medium">Worker 流式代理</span>
+                            </div>
+                            <p class="text-[11px] leading-relaxed text-zinc-400">推荐，稳定绕过跨域，实时反馈</p>
+                        </div>
+                        <div class="engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-white border-zinc-200 hover:border-zinc-400 text-zinc-900" data-mode="background">
+                            <div class="flex items-center gap-2 mb-1.5">
+                                <i data-lucide="globe" class="w-4 h-4 text-zinc-500"></i>
+                                <span class="text-[13px] font-medium">Worker 后台任务</span>
+                            </div>
+                            <p class="text-[11px] leading-relaxed text-zinc-500">适合长耗时任务，支持后台恢复</p>
+                        </div>
+                        <div class="engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-white border-zinc-200 hover:border-zinc-400 text-zinc-900" data-mode="direct">
+                            <div class="flex items-center gap-2 mb-1.5">
+                                <i data-lucide="monitor-smartphone" class="w-4 h-4 text-zinc-500"></i>
+                                <span class="text-[13px] font-medium">浏览器直连</span>
+                            </div>
+                            <p class="text-[11px] leading-relaxed text-zinc-500">需上游支持CORS，不经过Worker</p>
+                        </div>
+                    </div>
+                </section>
+                
+                <!-- Advanced -->
+                <section class="space-y-4">
+                    <h3 class="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">高级选项</h3>
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between p-3.5 bg-[#FAFAFA] rounded-xl border border-zinc-200">
+                            <div>
+                                <div class="text-[13px] font-medium text-zinc-800">请求超时 (秒)</div>
+                                <div class="text-[11px] text-zinc-500 mt-0.5">Worker 硬性限制最高 900s</div>
+                            </div>
+                            <input type="number" id="set-timeout" min="10" max="900" value="420" class="w-20 bg-white border border-zinc-200 rounded-md py-1.5 px-2 text-[13px] text-center focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 focus:outline-none transition-all">
+                        </div>
+                    </div>
+                </section>
+            </div>
+            
+            <div class="px-6 py-4 border-t border-zinc-100 flex justify-end gap-3 bg-white z-10">
+                <button id="cancel-settings-btn" class="px-4 py-2 rounded-lg text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 transition-colors">取消</button>
+                <button id="save-settings-btn" class="px-4 py-2 rounded-lg text-[13px] bg-zinc-900 hover:bg-zinc-800 active:scale-[0.98] text-white font-medium transition-all">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview Modal -->
+    <div id="preview-modal" class="hidden-view fixed inset-0 z-[200] flex bg-zinc-950/90 backdrop-blur-md animate-fade-in">
+        <div class="flex-grow flex items-center justify-center p-6 relative">
+            <button id="close-preview-btn" class="absolute top-6 right-6 p-2 bg-white/10 text-white rounded-full hover:bg-white/20 transition-colors z-10"><i data-lucide="x" class="w-5 h-5"></i></button>
+            <img id="preview-img" src="" class="max-w-full max-h-[90vh] object-contain shadow-2xl rounded-sm">
+        </div>
+        <div class="w-[320px] bg-white border-l border-zinc-200 p-6 flex flex-col overflow-y-auto shadow-2xl animate-slide-right">
+            <h3 class="text-[14px] font-semibold text-zinc-900 mb-6 flex items-center gap-2"><i data-lucide="image" class="w-4 h-4"></i> 图像检查器</h3>
+            
+            <div class="space-y-3 text-[13px] flex-grow" id="preview-details">
+                <!-- Populated via JS -->
+            </div>
+
+            <div class="mt-8 space-y-2.5">
+               <button id="preview-download" class="w-full py-2.5 bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-800 rounded-lg text-[13px] font-medium flex items-center justify-center gap-2 transition-colors"><i data-lucide="download" class="w-4 h-4"></i> 保存原图</button>
+               <button id="preview-copy" class="w-full py-2.5 bg-white hover:bg-zinc-50 border border-zinc-200 text-zinc-800 rounded-lg text-[13px] font-medium flex items-center justify-center gap-2 transition-colors"><i data-lucide="copy" class="w-4 h-4"></i> 复制到剪贴板</button>
+               <button class="w-full py-2.5 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-[13px] font-medium flex items-center justify-center gap-2 transition-colors mt-4" onclick="showToast('已设为参考图', 'success'); document.getElementById('close-preview-btn').click();"><i data-lucide="image-plus" class="w-4 h-4"></i> 使用为参考图</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="fixed top-6 left-1/2 -translate-x-1/2 z-[300] flex flex-col gap-2 pointer-events-none"></div>
+
+    <script>
+        const state = {
+            mode: 't2i', // t2i or i2i
+            prompt: '',
+            aspectRatio: '1:1',
+            resolution: 'auto',
+            count: 1,
+            concurrency: 1,
+            refImages: [],
+            tasks: [],
+            history: [],
+            settings: {
+                apiUrl: 'https://api.openai.com/v1',
+                apiKey: '',
+                model: 'gpt-image-2',
+                requestMode: 'stream',
+                timeout: 420
+            }
+        };
+
+        const ASPECT_RATIOS = [
+            { id: '1:1', label: '1:1', shape: 'w-5 h-5' },
+            { id: '3:4', label: '3:4', shape: 'w-[15px] h-[20px]' },
+            { id: '4:3', label: '4:3', shape: 'w-[20px] h-[15px]' },
+            { id: '9:16', label: '9:16', shape: 'w-[12px] h-[22px]' },
+            { id: '16:9', label: '16:9', shape: 'w-[22px] h-[12px]' },
+            { id: '2:3', label: '2:3', shape: 'w-[14px] h-[21px]' },
+            { id: '3:2', label: '3:2', shape: 'w-[21px] h-[14px]' },
+            { id: 'auto', label: '自动', shape: 'w-5 h-5 border-dashed', isAuto: true }
+        ];
+
+        const REQUEST_MODES = {
+            stream: { label: 'Worker 流式代理', icon: 'server' },
+            background: { label: 'Worker 后台任务', icon: 'globe' },
+            direct: { label: '浏览器直连', icon: 'monitor-smartphone' }
+        };
+
+        const generateId = () => Math.random().toString(36).substring(2, 11);
+        
+        const formatBytes = (bytes, decimals = 2) => {
+            if (!+bytes) return '0 Bytes';
+            const k = 1024, dm = decimals < 0 ? 0 : decimals, sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        };
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const configs = {
+                error: { icon: 'x-circle', color: 'text-rose-600' },
+                warning: { icon: 'alert-triangle', color: 'text-amber-600' },
+                success: { icon: 'check-circle-2', color: 'text-emerald-600' },
+                info: { icon: 'info', color: 'text-zinc-600' }
+            };
+            const config = configs[type] || configs.info;
+
+            toast.className = `flex items-center gap-3 px-4 py-3 rounded-lg border border-zinc-200 shadow-[0_4px_12px_rgba(0,0,0,0.05)] bg-white text-zinc-900 pointer-events-auto animate-slide-top`;
+            toast.innerHTML = `
+                <i data-lucide="${config.icon}" class="w-4 h-4 shrink-0 ${config.color}"></i>
+                <span class="text-[13px] font-medium">${message}</span>
+                <button class="ml-3 p-1 hover:bg-zinc-100 rounded-md transition-colors" onclick="this.parentElement.remove()">
+                    <i data-lucide="x" class="w-3.5 h-3.5 text-zinc-400 hover:text-zinc-700"></i>
+                </button>
+            `;
+            container.appendChild(toast);
+            lucide.createIcons({ root: toast });
+            
+            setTimeout(() => {
+                if(toast.parentNode) {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateY(-1rem)';
+                    toast.style.transition = 'all 0.3s ease';
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, 3500);
+        }
+
+        // DOM Elements
+        const DOM = {
+            authScreen: document.getElementById('auth-screen'),
+            mainApp: document.getElementById('main-app'),
+            loginForm: document.getElementById('login-form'),
+            pwdInput: document.getElementById('password-input'),
+            loginErr: document.getElementById('login-error'),
+            
+            modeT2i: document.getElementById('mode-t2i'),
+            modeI2i: document.getElementById('mode-i2i'),
+            promptInput: document.getElementById('prompt-input'),
+            refSection: document.getElementById('ref-image-section'),
+            arGrid: document.getElementById('aspect-ratio-grid'),
+            resSelect: document.getElementById('resolution-select'),
+            arText: document.getElementById('current-ar-text'),
+            resWarn: document.getElementById('4k-warning'),
+            countInput: document.getElementById('count-input'),
+            countDisplay: document.getElementById('count-display'),
+            concurrencySelect: document.getElementById('concurrency-select'),
+            generateBtn: document.getElementById('generate-btn'),
+            
+            tasksContainer: document.getElementById('tasks-container'),
+            emptyState: document.getElementById('empty-state'),
+            
+            historySidebar: document.getElementById('history-sidebar'),
+            historyContainer: document.getElementById('history-container'),
+            historyEmpty: document.getElementById('history-empty'),
+            
+            settingsModal: document.getElementById('settings-modal'),
+            previewModal: document.getElementById('preview-modal')
+        };
+
+        function init() {
+            lucide.createIcons();
+            
+            // Login
+            DOM.loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if(DOM.pwdInput.value.length < 10) {
+                    DOM.loginErr.classList.remove('hidden-view');
+                } else {
+                    DOM.authScreen.classList.add('hidden-view');
+                    DOM.mainApp.classList.remove('hidden-view');
+                    DOM.mainApp.classList.add('flex');
+                    renderAspectRatios();
+                    updateGenerateBtn();
+                }
+            });
+
+            // Mode switching
+            const setMode = (mode) => {
+                state.mode = mode;
+                if(mode === 't2i') {
+                    DOM.modeT2i.className = "flex-1 py-1.5 text-[12px] font-medium rounded-md transition-all bg-white text-zinc-900 shadow-sm border border-zinc-200/50";
+                    DOM.modeI2i.className = "flex-1 py-1.5 text-[12px] font-medium rounded-md transition-all text-zinc-500 hover:text-zinc-700";
+                    DOM.refSection.classList.add('hidden-view');
+                } else {
+                    DOM.modeI2i.className = "flex-1 py-1.5 text-[12px] font-medium rounded-md transition-all bg-white text-zinc-900 shadow-sm border border-zinc-200/50";
+                    DOM.modeT2i.className = "flex-1 py-1.5 text-[12px] font-medium rounded-md transition-all text-zinc-500 hover:text-zinc-700";
+                    DOM.refSection.classList.remove('hidden-view');
+                }
+                updateGenerateBtn();
+            };
+            DOM.modeT2i.addEventListener('click', () => setMode('t2i'));
+            DOM.modeI2i.addEventListener('click', () => setMode('i2i'));
+
+            // Inputs
+            DOM.promptInput.addEventListener('input', (e) => {
+                state.prompt = e.target.value;
+                updateGenerateBtn();
+            });
+
+            DOM.countInput.addEventListener('input', (e) => {
+                state.count = parseInt(e.target.value);
+                DOM.countDisplay.textContent = state.count;
+            });
+
+            DOM.concurrencySelect.addEventListener('change', (e) => {
+                state.concurrency = parseInt(e.target.value);
+            });
+
+            DOM.resSelect.addEventListener('change', (e) => {
+                state.resolution = e.target.value;
+                if (state.resolution !== 'auto' && state.aspectRatio === 'auto') {
+                    state.aspectRatio = '1:1';
+                }
+                if (state.resolution === '4k') {
+                    DOM.resWarn.classList.remove('hidden-view');
+                } else {
+                    DOM.resWarn.classList.add('hidden-view');
+                }
+                renderAspectRatios();
+            });
+
+            // Settings Modals
+            document.getElementById('open-settings-btn').addEventListener('click', () => {
+                DOM.settingsModal.classList.remove('hidden-view');
+                // Sync UI
+                document.getElementById('set-apiurl').value = state.settings.apiUrl;
+                document.getElementById('set-apikey').value = state.settings.apiKey;
+                document.getElementById('set-model').value = state.settings.model;
+                document.getElementById('set-timeout').value = state.settings.timeout;
+                document.querySelectorAll('.engine-opt').forEach(el => {
+                    if(el.dataset.mode === state.settings.requestMode) {
+                        el.className = "engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-zinc-900 border-zinc-900 text-white";
+                        el.querySelector('i').classList.replace('text-zinc-500', 'text-zinc-300');
+                        el.querySelector('p').classList.replace('text-zinc-500', 'text-zinc-400');
+                    } else {
+                        el.className = "engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-white border-zinc-200 hover:border-zinc-400 text-zinc-900";
+                        el.querySelector('i').classList.replace('text-zinc-300', 'text-zinc-500');
+                        el.querySelector('p').classList.replace('text-zinc-400', 'text-zinc-500');
+                    }
+                });
+            });
+
+            document.getElementById('close-settings-btn').addEventListener('click', () => {
+                DOM.settingsModal.classList.add('hidden-view');
+            });
+            document.getElementById('cancel-settings-btn').addEventListener('click', () => {
+                DOM.settingsModal.classList.add('hidden-view');
+            });
+
+            document.querySelectorAll('.engine-opt').forEach(opt => {
+                opt.addEventListener('click', () => {
+                    document.querySelectorAll('.engine-opt').forEach(el => {
+                        el.className = "engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-white border-zinc-200 hover:border-zinc-400 text-zinc-900";
+                        el.querySelector('i').classList.replace('text-zinc-300', 'text-zinc-500');
+                        el.querySelector('p').classList.replace('text-zinc-400', 'text-zinc-500');
+                    });
+                    opt.className = "engine-opt p-3.5 rounded-xl border cursor-pointer transition-all bg-zinc-900 border-zinc-900 text-white";
+                    opt.querySelector('i').classList.replace('text-zinc-500', 'text-zinc-300');
+                    opt.querySelector('p').classList.replace('text-zinc-500', 'text-zinc-400');
+                    state.settings.requestMode = opt.dataset.mode;
+                });
+            });
+
+            document.getElementById('save-settings-btn').addEventListener('click', () => {
+                state.settings.apiUrl = document.getElementById('set-apiurl').value;
+                state.settings.apiKey = document.getElementById('set-apikey').value;
+                state.settings.model = document.getElementById('set-model').value;
+                state.settings.timeout = parseInt(document.getElementById('set-timeout').value);
+                
+                // Update Header
+                const modeData = REQUEST_MODES[state.settings.requestMode];
+                document.getElementById('header-mode-text').textContent = modeData.label;
+                document.getElementById('engine-display').textContent = state.settings.model;
+                
+                DOM.settingsModal.classList.add('hidden-view');
+                showToast("配置已保存", "success");
+            });
+
+            // History Sidebar
+            document.getElementById('toggle-history-btn').addEventListener('click', () => {
+                if (DOM.historySidebar.classList.contains('hidden-view')) {
+                    DOM.historySidebar.classList.remove('hidden-view');
+                    DOM.historySidebar.classList.add('flex');
+                    document.getElementById('toggle-history-btn').classList.add('bg-zinc-100', 'text-zinc-900');
+                } else {
+                    DOM.historySidebar.classList.add('hidden-view');
+                    DOM.historySidebar.classList.remove('flex');
+                    document.getElementById('toggle-history-btn').classList.remove('bg-zinc-100', 'text-zinc-900');
+                }
+            });
+            document.getElementById('close-history-btn').addEventListener('click', () => {
+                DOM.historySidebar.classList.add('hidden-view');
+                DOM.historySidebar.classList.remove('flex');
+                document.getElementById('toggle-history-btn').classList.remove('bg-zinc-100', 'text-zinc-900');
+            });
+
+            // Generate Action
+            DOM.generateBtn.addEventListener('click', handleGenerate);
+            
+            // Preview Modal
+            document.getElementById('close-preview-btn').addEventListener('click', () => {
+                DOM.previewModal.classList.add('hidden-view');
+            });
+            document.getElementById('preview-copy').addEventListener('click', () => {
+                 document.execCommand('copy');
+                 showToast("图片已尝试复制到剪贴板", "success");
+            });
+            document.getElementById('preview-download').addEventListener('click', () => {
+                 showToast("开始下载图片...", "info");
+            });
+
+            // File Upload Mock
+            document.getElementById('file-upload').addEventListener('change', (e) => {
+                const files = Array.from(e.target.files);
+                if (state.refImages.length + files.length > 8) {
+                    showToast("最多支持 8 张参考图", "warning");
+                    return;
+                }
+                
+                let totalSize = state.refImages.reduce((acc, f) => acc + (f.size || 0), 0);
+                
+                for (const file of files) {
+                    if (file.size > 12 * 1024 * 1024) {
+                        showToast(`${file.name} 超过 12MB 限制`, "error");
+                        continue;
+                    }
+                    if (totalSize + file.size > 50 * 1024 * 1024) {
+                        showToast("总大小超过 50MB 限制", "error");
+                        break;
+                    }
+                    const newRef = { file, preview: URL.createObjectURL(file), size: file.size };
+                    state.refImages.push(newRef);
+                    totalSize += file.size;
+                }
+                renderRefImages();
+                updateGenerateBtn();
+            });
+        }
+
+        function renderAspectRatios() {
+            DOM.arGrid.innerHTML = '';
+            DOM.arText.textContent = state.aspectRatio;
+
+            ASPECT_RATIOS.forEach(r => {
+                const isDisabled = r.isAuto && state.resolution !== 'auto';
+                const isActive = state.aspectRatio === r.id;
+                
+                const btn = document.createElement('button');
+                btn.className = `relative flex flex-col items-center justify-center h-14 rounded-lg border transition-all 
+                    ${isDisabled ? 'opacity-40 cursor-not-allowed bg-[#FAFAFA] border-zinc-200' : 
+                      isActive ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 
+                      'bg-white border-zinc-200 hover:border-zinc-300 text-zinc-600 hover:bg-[#FAFAFA]'}`;
+                
+                if (isDisabled) btn.disabled = true;
+                
+                btn.innerHTML = `
+                    <div class="h-6 flex items-center justify-center mb-1">
+                        <div class="border-[1.5px] rounded-sm ${isActive ? 'border-white/80 bg-white/10' : 'border-zinc-400'} ${r.shape}"></div>
+                    </div>
+                    <span class="text-[9px] font-medium ${isActive ? 'text-white' : 'text-zinc-500'}">${r.label}</span>
+                `;
+
+                btn.addEventListener('click', () => {
+                    if(!isDisabled) {
+                        state.aspectRatio = r.id;
+                        renderAspectRatios();
+                    }
+                });
+
+                DOM.arGrid.appendChild(btn);
+            });
+        }
+
+        function renderRefImages() {
+            // Keep the upload button, remove others
+            const container = document.getElementById('ref-images-container');
+            const uploadBtn = document.getElementById('upload-ref-btn');
+            container.innerHTML = '';
+            
+            document.getElementById('ref-count').textContent = `${state.refImages.length}/8`;
+
+            state.refImages.forEach((img, i) => {
+                const div = document.createElement('div');
+                div.className = "relative aspect-square rounded-lg overflow-hidden border border-zinc-200 group bg-[#FAFAFA]";
+                div.innerHTML = `
+                    <img src="${img.preview}" class="w-full h-full object-cover transition-transform group-hover:scale-105" />
+                    <div class="absolute inset-0 bg-zinc-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <button class="p-1 bg-white/20 text-white rounded-md hover:bg-rose-500 transition-colors" data-idx="${i}">
+                            <i data-lucide="x" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+            
+            if (state.refImages.length < 8) {
+                container.appendChild(uploadBtn);
+            }
+            
+            // Rebind delete events
+            container.querySelectorAll('button[data-idx]').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const idx = parseInt(e.currentTarget.dataset.idx);
+                    URL.revokeObjectURL(state.refImages[idx].preview);
+                    state.refImages.splice(idx, 1);
+                    renderRefImages();
+                    updateGenerateBtn();
+                });
+            });
+            lucide.createIcons({root: container});
+        }
+
+        function updateGenerateBtn() {
+            const btn = DOM.generateBtn;
+            if (state.mode === 't2i' && !state.prompt.trim()) {
+                btn.disabled = true;
+            } else if (state.mode === 'i2i' && state.refImages.length === 0) {
+                btn.disabled = true;
+            } else {
+                btn.disabled = false;
+            }
+        }
+
+        async function handleGenerate() {
+            if (state.mode === 't2i' && !state.prompt.trim()) return;
+            if (state.mode === 'i2i' && state.refImages.length === 0) {
+                showToast("图生图模式请至少上传一张参考图", "warning");
+                return;
+            }
+
+            DOM.emptyState.classList.add('hidden-view');
+
+            const taskId = generateId();
+            const newTask = {
+                id: taskId,
+                mode: state.mode,
+                params: { prompt: state.prompt, resolution: state.resolution, aspectRatio: state.aspectRatio, count: state.count },
+                status: 'generating',
+                startTime: Date.now(),
+                requestMode: state.settings.requestMode,
+                items: Array(state.count).fill({ status: 'pending' })
+            };
+
+            state.tasks.unshift(newTask);
+            renderAllTasks();
+
+            // Mock generation
+            const is4K = state.resolution === '4k';
+            const baseDelay = is4K ? 4000 : 1500;
+            
+            let completed = 0;
+            const results = [];
+            
+            for (let i = 0; i < state.count; i++) {
+                const delay = baseDelay + Math.random() * (is4K ? 5000 : 2000);
+                
+                setTimeout(() => {
+                    const errorScenarios = [
+                        { prob: 0.05, code: 401, msg: "API Key Error or Insufficient Quota" },
+                        { prob: is4K ? 0.3 : 0.02, code: 502, msg: "Bad Gateway - Upstream failed" },
+                    ];
+                    
+                    let error = null;
+                    for (const scenario of errorScenarios) {
+                        if (Math.random() < scenario.prob) { error = scenario; break; }
+                    }
+
+                    if (error) {
+                        results[i] = { id: generateId(), status: 'error', error: error.msg, time: delay };
+                    } else {
+                        const width = state.resolution === '4k' ? 3840 : (state.resolution === '2k' ? 2048 : 1024);
+                        const height = Math.round(width * (state.aspectRatio === '16:9' ? 9/16 : state.aspectRatio === '9:16' ? 16/9 : 1));
+                        results[i] = { 
+                            id: generateId(), status: 'success', 
+                            url: `https://placehold.co/${width>1024?1024:width}x${height>1024?1024:height}/18181b/ffffff?text=AI+Generated`,
+                            fullUrl: `https://placehold.co/${width}x${height}/18181b/ffffff?text=AI+Generated`,
+                            width, height, size: Math.random() * 5 * 1024 * 1024, time: delay 
+                        };
+                    }
+                    
+                    completed++;
+                    
+                    // Find task and update
+                    const task = state.tasks.find(t => t.id === taskId);
+                    if(task) {
+                        task.items = [...results, ...Array(state.count - results.length).fill({ status: 'pending' })];
+                        if (completed === state.count) {
+                            const hasErrors = results.some(i => i.status === 'error');
+                            task.status = hasErrors ? 'partial_completed' : 'completed';
+                            task.duration = Date.now() - task.startTime;
+                            addToHistory(task);
+                        }
+                        updateTaskDOM(task); // Efficient targeted update
+                    }
+                }, delay);
+            }
+        }
+
+        function renderAllTasks() {
+            DOM.tasksContainer.innerHTML = '';
+            state.tasks.forEach(task => {
+                const taskDiv = document.createElement('div');
+                taskDiv.id = `task-${task.id}`;
+                taskDiv.className = "bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-sm";
+                DOM.tasksContainer.appendChild(taskDiv);
+                updateTaskDOM(task);
+            });
+        }
+
+        function updateTaskDOM(task) {
+            const taskDiv = document.getElementById(`task-${task.id}`);
+            if(!taskDiv) return;
+
+            let statusBadge = '';
+            if (task.status === 'generating') statusBadge = `<span class="flex items-center gap-1.5 text-zinc-600 bg-zinc-50 px-2 py-1 rounded"><i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin-slow"></i> 处理中</span>`;
+            else if (task.status === 'completed') statusBadge = `<span class="flex items-center gap-1.5 text-zinc-500 font-mono"><i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i> ${(task.duration/1000).toFixed(1)}s</span>`;
+            else if (task.status === 'partial_completed') statusBadge = `<span class="flex items-center gap-1.5 text-amber-600"><i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i> 部分完成</span>`;
+            else if (task.status === 'error') statusBadge = `<span class="flex items-center gap-1.5 text-rose-600"><i data-lucide="x-circle" class="w-3.5 h-3.5"></i> 失败</span>`;
+
+            let itemsHtml = task.items.map((item, idx) => {
+                if (item.status === 'pending') {
+                    return `<div class="relative aspect-square rounded-lg bg-white border border-zinc-200 overflow-hidden flex flex-col items-center justify-center text-zinc-400">
+                                <i data-lucide="loader-2" class="w-5 h-5 animate-spin-slow mb-2"></i>
+                                <span class="text-[10px] font-mono font-medium text-zinc-400 bg-[#FAFAFA] px-2 py-0.5 rounded border border-zinc-100">Task #${idx+1}</span>
+                            </div>`;
+                }
+                if (item.status === 'error') {
+                    return `<div class="relative aspect-square rounded-lg bg-[#FAFAFA] border border-zinc-200 overflow-hidden flex flex-col items-center justify-center p-3 text-center">
+                                <i data-lucide="x-circle" class="w-6 h-6 text-zinc-300 mb-1"></i>
+                                <span class="text-[10px] font-medium text-zinc-500 leading-tight" title="${item.error}">${item.error}</span>
+                            </div>`;
+                }
+                // Success
+                return `<div class="relative aspect-square rounded-lg bg-white border border-zinc-200 overflow-hidden group shadow-sm">
+                            <img src="${item.url}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" loading="lazy">
+                            <div class="absolute inset-0 bg-zinc-950/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-between p-2">
+                                <div class="flex justify-end">
+                                    <button onclick='openPreview(${JSON.stringify(item)})' class="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-md transition-colors backdrop-blur-sm"><i data-lucide="maximize-2" class="w-3.5 h-3.5"></i></button>
+                                </div>
+                                <div class="flex justify-center gap-1.5">
+                                    <button class="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-md transition-colors backdrop-blur-sm" title="下载" onclick="showToast('下载已开始','success')"><i data-lucide="download" class="w-3.5 h-3.5"></i></button>
+                                    <button class="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-md transition-colors backdrop-blur-sm" title="复制" onclick="showToast('已复制到剪贴板','success')"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
+                                    <button class="p-1.5 bg-white text-zinc-900 rounded-md transition-colors hover:bg-zinc-200 shadow-sm" title="作为参考图" onclick="showToast('已加入参考图','success')"><i data-lucide="image-plus" class="w-3.5 h-3.5"></i></button>
+                                </div>
+                            </div>
+                            <div class="absolute top-1.5 left-1.5 flex gap-1 group-hover:opacity-0 transition-opacity duration-200 pointer-events-none">
+                                <div class="bg-white/90 backdrop-blur shadow-sm text-zinc-700 text-[9px] font-mono font-medium px-1.5 py-0.5 rounded border border-zinc-200">${item.width}x${item.height}</div>
+                            </div>
+                        </div>`;
+            }).join('');
+
+            taskDiv.innerHTML = `
+                <div class="px-4 py-3 border-b border-zinc-100 bg-white flex items-center justify-between gap-4 sticky top-0 z-10">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <div class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 ${task.mode === 't2i' ? 'bg-zinc-100 text-zinc-600' : 'bg-zinc-800 text-white'}">
+                            ${task.mode.toUpperCase()}
+                        </div>
+                        <div class="text-[13px] text-zinc-800 truncate max-w-lg font-medium" title="${task.params.prompt}">
+                            ${task.params.prompt || '<span class="text-zinc-400 italic">空提示词</span>'}
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-4 shrink-0 text-[12px]">
+                        <div class="flex items-center gap-1.5 text-zinc-500 font-mono bg-[#FAFAFA] px-2 py-1 rounded border border-zinc-100">
+                            <span>${task.params.resolution.toUpperCase()}</span>
+                            <span class="text-zinc-300">/</span>
+                            <span>${task.params.aspectRatio}</span>
+                        </div>
+                        <div class="flex items-center gap-2 font-medium">
+                            ${statusBadge}
+                            ${task.status !== 'generating' ? `<button onclick="removeTask('${task.id}')" class="ml-1 p-1 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded transition-colors"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 bg-[#FAFAFA]">
+                    ${itemsHtml}
+                </div>
+            `;
+            lucide.createIcons({ root: taskDiv });
+        }
+
+        window.removeTask = function(id) {
+            state.tasks = state.tasks.filter(t => t.id !== id);
+            const taskDiv = document.getElementById(`task-${id}`);
+            if (taskDiv) taskDiv.remove();
+            if (state.tasks.length === 0) DOM.emptyState.classList.remove('hidden-view');
+        };
+
+        window.openPreview = function(item) {
+            DOM.previewModal.classList.remove('hidden-view');
+            document.getElementById('preview-img').src = item.fullUrl || item.url;
+            
+            let detailsHtml = `
+                <div class="bg-[#FAFAFA] border border-zinc-100 p-3.5 rounded-xl">
+                    <div class="text-zinc-400 text-[11px] mb-1">当前状态</div>
+                    <div class="text-zinc-900 font-medium flex items-center gap-1.5">
+                        <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-zinc-900"></i> 生成完成
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div class="bg-[#FAFAFA] border border-zinc-100 p-3.5 rounded-xl">
+                        <div class="text-zinc-400 text-[11px] mb-1">物理尺寸</div>
+                        <div class="text-zinc-900 font-mono font-medium">${item.width}×${item.height}</div>
+                    </div>
+                    <div class="bg-[#FAFAFA] border border-zinc-100 p-3.5 rounded-xl">
+                        <div class="text-zinc-400 text-[11px] mb-1">文件大小</div>
+                        <div class="text-zinc-900 font-mono font-medium">${formatBytes(item.size)}</div>
+                    </div>
+                </div>
+                <div class="bg-[#FAFAFA] border border-zinc-100 p-3.5 rounded-xl">
+                    <div class="text-zinc-400 text-[11px] mb-1">处理耗时</div>
+                    <div class="text-zinc-900 font-mono font-medium">${(item.time / 1000).toFixed(1)}s</div>
+                </div>
+            `;
+            document.getElementById('preview-details').innerHTML = detailsHtml;
+            lucide.createIcons({ root: document.getElementById('preview-details') });
+        };
+
+        function addToHistory(task) {
+            state.history.unshift(task);
+            if (state.history.length > 50) state.history.pop();
+            renderHistory();
+        }
+
+        function renderHistory() {
+            if (state.history.length === 0) {
+                DOM.historyEmpty.style.display = 'flex';
+                return;
+            }
+            DOM.historyEmpty.style.display = 'none';
+            
+            // Remove old history items
+            Array.from(DOM.historyContainer.children).forEach(child => {
+                if(child.id !== 'history-empty') child.remove();
+            });
+
+            state.history.forEach((h, i) => {
+                const successCount = h.items.filter(item => item.status === 'success').length;
+                const firstThumb = h.items.find(item => item.status === 'success')?.url;
+                
+                const div = document.createElement('div');
+                div.className = "bg-white border border-zinc-200 rounded-lg p-2.5 hover:border-zinc-400 hover:shadow-sm transition-all group cursor-pointer mt-2";
+                div.innerHTML = `
+                    <div class="flex gap-2.5">
+                        <div class="w-10 h-10 bg-[#FAFAFA] rounded border border-zinc-100 shrink-0 overflow-hidden flex items-center justify-center">
+                            ${firstThumb ? `<img src="${firstThumb}" class="w-full h-full object-cover">` : `<i data-lucide="x-circle" class="w-4 h-4 text-zinc-200"></i>`}
+                        </div>
+                        <div class="min-w-0 flex-1 flex flex-col justify-center">
+                            <div class="text-[11px] font-medium text-zinc-700 truncate mb-0.5" title="${h.params.prompt}">${h.params.prompt || '(无提示词)'}</div>
+                            <div class="flex items-center gap-1.5 text-[9px] text-zinc-500 font-mono">
+                                <span class="bg-zinc-100 px-1 py-0.5 rounded text-zinc-600">${h.mode.toUpperCase()}</span>
+                                <span>${successCount}/${h.items.length} 成功</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-2 pt-2 border-t border-zinc-100 flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity h-0 group-hover:h-auto overflow-hidden">
+                        <div class="text-[9px] text-zinc-400 font-mono">${(h.duration/1000).toFixed(1)}s</div>
+                        <button class="text-[10px] font-medium bg-zinc-100 hover:bg-zinc-900 hover:text-white text-zinc-700 px-2 py-1 rounded transition-colors" onclick="reuseParams(${i})">复用参数</button>
+                    </div>
+                `;
+                DOM.historyContainer.appendChild(div);
+            });
+            lucide.createIcons({ root: DOM.historyContainer });
+        }
+
+        window.reuseParams = function(index) {
+            const h = state.history[index];
+            if(!h) return;
+            
+            // Mode
+            if(h.mode === 't2i') DOM.modeT2i.click();
+            else DOM.modeI2i.click();
+            
+            // Prompt
+            DOM.promptInput.value = h.params.prompt;
+            state.prompt = h.params.prompt;
+            
+            // Resolution
+            DOM.resSelect.value = h.params.resolution;
+            state.resolution = h.params.resolution;
+            
+            // Aspect Ratio
+            state.aspectRatio = h.params.aspectRatio;
+            
+            // Count
+            DOM.countInput.value = h.params.count;
+            state.count = h.params.count;
+            DOM.countDisplay.textContent = state.count;
+
+            renderAspectRatios();
+            updateGenerateBtn();
+            showToast("参数已复用到工作台", "success");
+        };
+
+        // Start App
+        document.addEventListener('DOMContentLoaded', init);
+
+    </script>
+</body>
+</html>

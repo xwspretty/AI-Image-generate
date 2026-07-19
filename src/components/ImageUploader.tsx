@@ -76,40 +76,42 @@ export function ImageUploader({
   }
 
   const totalSize = images.reduce((sum, image) => sum + image.size, 0)
+  const canAdd = images.length < maxImages
 
   return (
     <div className="uploader">
-      <label
-        className={`dropzone ${images.length ? 'compact' : ''}`}
+      <div className="upload-header-line">
+        <span>{images.length}/{maxImages}</span>
+        <small>{(totalSize / 1024 / 1024).toFixed(1)}MB / {(maxTotalSize / 1024 / 1024).toFixed(0)}MB</small>
+      </div>
+      <div
+        className="upload-list"
         onDrop={(e) => {
           e.preventDefault()
           void addFiles(e.dataTransfer.files)
         }}
         onDragOver={(e) => e.preventDefault()}
       >
-        <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={handleInput} />
-        <span className="dropzone-icon">＋</span>
-        <strong>{images.length ? '继续添加参考图' : '上传参考图'}</strong>
-        <small>
-          支持多选或拖拽，{images.length}/{maxImages} 张，{(totalSize / 1024 / 1024).toFixed(1)}MB
-        </small>
-      </label>
-
-      {images.length ? (
-        <div className="upload-list">
-          {images.map((image, index) => (
-            <article key={image.id} className="upload-item">
-              <img src={image.dataUrl} alt={`参考图 ${index + 1}`} />
-              <div className="upload-item-info">
-                <strong>{image.name}</strong>
-                <span>#{index + 1} · {(image.size / 1024 / 1024).toFixed(2)} MB</span>
-              </div>
-              <button type="button" className="mini-danger-btn" onClick={() => removeImage(image.id)}>移除</button>
-            </article>
-          ))}
-          <button type="button" className="ghost-btn danger" onClick={clearAll}>清空参考图</button>
-        </div>
-      ) : null}
+        {images.map((image, index) => (
+          <article key={image.id} className="upload-item" title={`${image.name} · ${(image.size / 1024 / 1024).toFixed(2)} MB`}>
+            <img src={image.dataUrl} alt={`参考图 ${index + 1}`} />
+            <div className="upload-item-info">
+              <strong>{image.name}</strong>
+              <span>#{index + 1} · {(image.size / 1024 / 1024).toFixed(2)} MB</span>
+            </div>
+            <button type="button" className="mini-danger-btn" onClick={() => removeImage(image.id)}>移除</button>
+          </article>
+        ))}
+        {canAdd ? (
+          <label className="dropzone compact">
+            <input type="file" multiple accept="image/png,image/jpeg,image/webp" onChange={handleInput} />
+            <span className="dropzone-icon">＋</span>
+            <strong>添加</strong>
+            <small>拖拽/多选</small>
+          </label>
+        ) : null}
+        {images.length ? <button type="button" className="ghost-btn danger" onClick={clearAll}>清空参考图</button> : null}
+      </div>
     </div>
   )
 }

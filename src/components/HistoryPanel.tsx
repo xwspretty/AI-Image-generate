@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { AspectRatio, HistoryItem, ResolutionTier } from '../types'
 import { getResolutionLabel } from '../lib/ratios'
-import { copyImageToClipboard, copyTextToClipboard, getImageProxyUrl } from '../lib/api'
+import { copyImageToClipboard, copyTextToClipboard, getImageProxyUrl, imageSourceToDataUrl } from '../lib/api'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 interface Props {
@@ -66,11 +66,20 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
     }
   }
 
+  async function useHistoryImageAsReference(src: string) {
+    try {
+      const dataUrl = await imageSourceToDataUrl(src)
+      onUseImage(dataUrl)
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '添加参考图失败，请稍后重试', 'error')
+    }
+  }
+
   if (collapsed) {
     return (
       <aside className="history-panel collapsed">
         <button type="button" className="history-expand-btn" onClick={onToggleCollapsed} title="展开本地历史">
-          <span>历史</span>
+          <span>本地历史</span>
           <small>{items.length}</small>
         </button>
       </aside>
@@ -84,10 +93,7 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
           <h2>本地历史</h2>
           <p>保存在 IndexedDB，不上传服务器。</p>
         </div>
-        <div className="history-header-actions">
-          <button type="button" className="ghost-btn small" onClick={onToggleCollapsed}>收起</button>
-          <button type="button" className="ghost-btn small" onClick={onClear} disabled={!items.length}>清空</button>
-        </div>
+        <button type="button" className="history-collapse-btn" onClick={onToggleCollapsed} title="收起本地历史" aria-label="收起本地历史">‹</button>
       </header>
 
       {items.length === 0 ? (
@@ -99,7 +105,6 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
               <div className="history-thumbs">
                 {item.images.slice(0, 3).map((src, index) => {
                   const remoteUrl = item.remoteUrls?.[index]
-                  const canUseAsReference = src.startsWith('data:')
                   const hiddenCount = item.images.length - 3
                   return (
                     <div className="history-thumb-card" key={`${item.id}-${index}`}>
@@ -111,7 +116,7 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
                         <button type="button" onClick={() => openPreview(src, index, remoteUrl, item)}>放大</button>
                         <button type="button" onClick={() => void copyHistoryImage(src)}>复制</button>
                         {remoteUrl ? <button type="button" onClick={() => void copyHistoryUrl(remoteUrl)}>URL</button> : null}
-                        {canUseAsReference ? <button type="button" onClick={() => onUseImage(src)}>参考</button> : null}
+                        <button type="button" onClick={() => void useHistoryImageAsReference(src)}>参考</button>
                       </div>
                     </div>
                   )
@@ -132,6 +137,9 @@ export function HistoryPanel({ items, collapsed, onToggleCollapsed, onReusePromp
               </div>
             </article>
           ))}
+          <div className="history-list-footer">
+            <button type="button" className="history-clear-btn" onClick={onClear}>清空本地历史</button>
+          </div>
         </div>
       )}
 

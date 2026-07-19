@@ -14,6 +14,7 @@ export interface AppSettings {
   apiKey: string
   identityToken: string
   model: string
+  promptModel: string
   timeoutSec: number
   count: number
   concurrency: number
@@ -43,6 +44,23 @@ export interface GenerateRequest {
   count: number
   concurrency: number
   inputImages?: InputImage[]
+}
+
+export interface PromptBuilderRequest {
+  description: string
+  mode: Mode
+  ratio: AspectRatio
+  resolution: ResolutionTier
+  targetModel: string
+  promptModel: string
+  baseUrl: string
+  apiKey: string
+}
+
+export interface PromptBuilderResponse {
+  ok: true
+  prompt: string
+  model: string
 }
 
 export interface GenerateResultItem {

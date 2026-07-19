@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
   identityToken: '',
   model: 'gpt-image-2',
+  promptModel: 'gpt-5.4-mini',
   timeoutSec: 420,
   count: 1,
   concurrency: 2,
@@ -39,6 +40,9 @@ function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
   const defaultResolution = normalizeResolution(raw.defaultResolution)
   const defaultRatio = normalizeRatioForResolution(normalizeRatio(raw.defaultRatio), defaultResolution)
   const identityToken = normalizeIdentityToken(raw.identityToken)
+  const promptModel = typeof raw.promptModel === 'string' && raw.promptModel.trim()
+    ? raw.promptModel.trim() === 'gpt-4.1-mini' ? DEFAULT_SETTINGS.promptModel : raw.promptModel.trim()
+    : DEFAULT_SETTINGS.promptModel
   return {
     ...DEFAULT_SETTINGS,
     ...raw,
@@ -50,6 +54,7 @@ function sanitizeSettings(raw: Partial<AppSettings>): AppSettings {
     defaultResolution,
     identityToken,
     autoUploadPixhost: raw.autoUploadPixhost === true,
+    promptModel,
     rememberSecrets: raw.rememberSecrets !== false,
   }
 }

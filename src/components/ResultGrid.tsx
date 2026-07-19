@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AspectRatio, GenerateResultItem, ResolutionTier } from '../types'
-import { copyImageToClipboard, copyTextToClipboard, downloadDataUrl, getImageProxyUrl } from '../lib/api'
+import { copyImageToClipboard, copyTextToClipboard, downloadDataUrl, getImageProxyUrl, imageSourceToDataUrl } from '../lib/api'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 interface Props {
@@ -86,6 +86,15 @@ export function ResultGrid({ loading, placeholders, results, ratio, resolution, 
     }
   }
 
+  async function useResultAsReference(src: string) {
+    try {
+      const dataUrl = await imageSourceToDataUrl(src)
+      onUseAsReference(dataUrl)
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '添加参考图失败，请稍后重试', 'error')
+    }
+  }
+
   return (
     <div className="result-grid">
       {cards.map((card) => (
@@ -99,7 +108,6 @@ export function ResultGrid({ loading, placeholders, results, ratio, resolution, 
             (() => {
               const src = card.image || card.remoteUrl!
               const displaySrc = getImageProxyUrl(src)
-              const canUseAsReference = Boolean(card.image?.startsWith('data:'))
               return (
             <>
               <img src={displaySrc} alt={`生成结果 ${card.index + 1}`} />
@@ -127,17 +135,15 @@ export function ResultGrid({ loading, placeholders, results, ratio, resolution, 
                   <button type="button" className="url-copy-btn" onClick={() => onUploadImage(card)}>上传图床</button>
                 )}
               </div>
+              <small className="card-meta">#{card.index + 1} · {card.elapsedMs ? `${(card.elapsedMs / 1000).toFixed(1)}s` : '完成'}</small>
               <div className="card-toolbar">
                 <button
                   type="button"
                   onClick={() => void downloadResultImage(src, card.index)}
                 >下载</button>
                 <button type="button" onClick={() => void copyResultImage(src)}>复制</button>
-                {canUseAsReference ? (
-                  <button type="button" onClick={() => onUseAsReference(card.image!)}>作为参考图</button>
-                ) : null}
+                <button type="button" onClick={() => void useResultAsReference(src)}>作为参考图</button>
               </div>
-              <small className="card-meta">#{card.index + 1} · {card.elapsedMs ? `${(card.elapsedMs / 1000).toFixed(1)}s` : '完成'}</small>
             </>
               )
             })()

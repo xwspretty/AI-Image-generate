@@ -1,7 +1,30 @@
 import { useEffect, useState } from 'react'
 import type { AppSettings } from '../types'
+import { listModelsDirect, listModelsViaWorker } from '../lib/api'
 import { clearSettings, deriveIdentityTokenFromPassword, IDENTITY_TOKEN_MIN_LENGTH, isValidIdentityToken, maskSecret, normalizeIdentityToken, validateSpacePassword } from '../lib/storage'
 
+const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
+const DEFAULT_PROMPT_MODEL = 'gpt-5.4-mini'
+
+function uniqueOptions(...groups: string[][]) {
+  return Array.from(new Set(groups.flat().map((item) => item.trim()).filter(Boolean)))
+}
+
+function isLocalPreview() {
+  return (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
+    && (window.location.port === '4173' || window.location.port === '5173')
+}
+
+function filterImageModels(models: string[]) {
+  return models.filter((model) => /^gpt-image/i.test(model))
+}
+
+function filterPromptModels(models: string[]) {
+  return models.filter((model) => /^gpt-.*mini/i.test(model) && !/image|tts|audio|transcribe|embedding|moderation|sora/i.test(model))
+}
+function selectValue(value: string, options: string[], customOpen: boolean) {
+  return customOpen || !options.includes(value) ? '__custom__' : value
+}
 interface Props {
   open: boolean
   settings: AppSettings
@@ -14,11 +37,18 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
   const [draft, setDraft] = useState(settings)
   const [spacePasswordDraft, setSpacePasswordDraft] = useState('')
   const [showSecrets, setShowSecrets] = useState(false)
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [customImageModelOpen, setCustomImageModelOpen] = useState(false)
+  const [customPromptModelOpen, setCustomPromptModelOpen] = useState(false)
 
   useEffect(() => {
     if (open) {
       setDraft(settings)
       setSpacePasswordDraft('')
+      setModelOptions([])
+      setCustomImageModelOpen(false)
+      setCustomPromptModelOpen(false)
     }
   }, [open, settings])
 
@@ -48,6 +78,38 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
     onClose()
     onMessage('设置已保存到浏览器本地', 'ok')
   }
+
+  async function refreshModels() {
+    if (!draft.baseUrl.trim()) {
+      onMessage('请先填写 API URL', 'error')
+      return
+    }
+    if (!draft.apiKey.trim()) {
+      onMessage('请先填写 API Key', 'error')
+      return
+    }
+    if (draft.requestMode !== 'direct' && !isLocalPreview() && !isValidIdentityToken(draft.identityToken)) {
+      onMessage(`请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`, 'error')
+      return
+    }
+
+    setLoadingModels(true)
+    try {
+      const models = draft.requestMode === 'direct' || isLocalPreview()
+        ? await listModelsDirect(draft.baseUrl, draft.apiKey)
+        : await listModelsViaWorker(draft.baseUrl, draft.apiKey, draft.identityToken)
+      setModelOptions(models)
+      const imageCount = filterImageModels(models).length
+      const promptCount = filterPromptModels(models).length
+      onMessage(models.length ? `已获取 ${models.length} 个模型，可用生图 ${imageCount} 个，提示词 ${promptCount} 个` : '接口没有返回模型列表，可继续手动填写', models.length ? 'ok' : 'error')
+    } catch (error) {
+      onMessage(error instanceof Error ? error.message : '获取模型列表失败', 'error')
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+  const imageModelOptions = uniqueOptions([DEFAULT_IMAGE_MODEL], filterImageModels(modelOptions), draft.model === DEFAULT_IMAGE_MODEL ? [] : [draft.model])
+  const promptModelOptions = uniqueOptions([DEFAULT_PROMPT_MODEL], filterPromptModels(modelOptions), draft.promptModel === DEFAULT_PROMPT_MODEL ? [] : [draft.promptModel])
 
   function clearLocal() {
     clearSettings()
@@ -134,15 +196,69 @@ export function SettingsModal({ open, settings, onClose, onSave, onMessage }: Pr
             </small>
           </label>
 
+          <div className="field full">
+            <div className="model-field-header">
+              <span>模型选择</span>
+              <button type="button" className="ghost-btn small" disabled={loadingModels} onClick={() => void refreshModels()}>
+                {loadingModels ? '获取中...' : '获取模型列表'}
+              </button>
+            </div>
+            <small>先从常用模型里选；点击获取后会合并你当前 API 返回的模型。下拉没有时仍可手动填写。</small>
+          </div>
+
           <label className="field">
-            <span>默认模型</span>
-            <input
-              value={draft.model}
-              placeholder="gpt-image-2"
-              onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-            />
+            <span>生图模型</span>
+            <select
+              value={selectValue(draft.model, imageModelOptions, customImageModelOpen)}
+              onChange={(e) => {
+                if (e.target.value === '__custom__') {
+                  setCustomImageModelOpen(true)
+                  return
+                }
+                setCustomImageModelOpen(false)
+                setDraft({ ...draft, model: e.target.value })
+              }}
+            >
+              {imageModelOptions.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+              <option value="__custom__">自定义模型...</option>
+            </select>
+            {customImageModelOpen || !imageModelOptions.includes(draft.model) ? (
+              <input
+                value={draft.model}
+                placeholder="gpt-image-2"
+                onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+              />
+            ) : null}
           </label>
 
+          <label className="field">
+            <span>提示词模型</span>
+            <select
+              value={selectValue(draft.promptModel, promptModelOptions, customPromptModelOpen)}
+              onChange={(e) => {
+                if (e.target.value === '__custom__') {
+                  setCustomPromptModelOpen(true)
+                  return
+                }
+                setCustomPromptModelOpen(false)
+                setDraft({ ...draft, promptModel: e.target.value })
+              }}
+            >
+              {promptModelOptions.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+              <option value="__custom__">自定义模型...</option>
+            </select>
+            {customPromptModelOpen || !promptModelOptions.includes(draft.promptModel) ? (
+              <input
+                value={draft.promptModel}
+                placeholder="gpt-5.4-mini"
+                onChange={(e) => setDraft({ ...draft, promptModel: e.target.value })}
+              />
+            ) : null}
+          </label>
           <label className="field">
             <span>超时时间（秒）</span>
             <input

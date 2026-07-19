@@ -1,4 +1,4 @@
-﻿import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
 import type { AspectRatio, Ratio, ResolutionTier } from '../src/types'
 
 interface Env {
@@ -48,6 +48,22 @@ interface RetryPayload {
   timeoutSec?: number
   concurrency?: number
   model?: string
+}
+
+interface PromptBuilderPayload {
+  description?: string
+  mode?: Mode
+  ratio?: AspectRatio
+  resolution?: ResolutionTier
+  targetModel?: string
+  promptModel?: string
+  baseUrl?: string
+  apiKey?: string
+}
+
+interface ModelListPayload {
+  baseUrl?: string
+  apiKey?: string
 }
 
 interface PixhostUploadPayload {
@@ -219,6 +235,20 @@ export default {
       const identity = await requireOwnerHash(request)
       if (identity.response) return identity.response
       return handleGenerateStream(request, env, ctx)
+    }
+
+    if (url.pathname === '/api/prompt-polish') {
+      if (request.method !== 'POST') return jsonError('bad_request', '仅支持 POST 请求', 405)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      return handlePromptPolish(request, env)
+    }
+
+    if (url.pathname === '/api/models') {
+      if (request.method !== 'POST') return jsonError('bad_request', '仅支持 POST 请求', 405)
+      const identity = await requireOwnerHash(request)
+      if (identity.response) return identity.response
+      return handleModelList(request, env)
     }
 
     if (url.pathname === '/api/upload-pixhost') {
@@ -581,6 +611,150 @@ async function handleStats(env: Env, ownerHash: string) {
   return json({ ok: true, stats: { today, todayGenerated, totalGenerated } })
 }
 
+async function handleModelList(request: Request, env: Env) {
+  let payload: ModelListPayload
+  try {
+    payload = await request.json() as ModelListPayload
+  } catch {
+    return jsonError('bad_request', '请求体不是有效 JSON', 400)
+  }
+
+  const apiKey = String(payload.apiKey || '').trim()
+  let baseUrl = ''
+  try {
+    baseUrl = normalizeBaseUrl(String(payload.baseUrl || '').trim(), env)
+  } catch (error) {
+    return jsonError('invalid_config', error instanceof Error ? error.message : 'API URL 无效', 400)
+  }
+  if (!apiKey) return jsonError('invalid_config', 'API Key 不能为空', 400)
+
+  try {
+    const upstream = await fetch(buildUpstreamUrl(baseUrl, 'models'), {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Cache-Control': 'no-store',
+      },
+    })
+    if (!upstream.ok) return jsonError('upstream_error', await readUpstreamError(upstream), upstream.status)
+    return json({ ok: true, models: parseModelIds(await upstream.json()) })
+  } catch (error) {
+    return jsonError('upstream_error', error instanceof Error ? error.message : '获取模型列表失败', 500)
+  }
+}
+
+function parseModelIds(payload: unknown) {
+  const data = (payload as { data?: unknown })?.data
+  if (!Array.isArray(data)) return []
+  return data
+    .map((item) => typeof item === 'string' ? item : typeof (item as { id?: unknown })?.id === 'string' ? (item as { id: string }).id : '')
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+}
+async function handlePromptPolish(request: Request, env: Env) {
+  let payload: PromptBuilderPayload
+  try {
+    payload = await request.json() as PromptBuilderPayload
+  } catch {
+    return jsonError('bad_request', '请求体不是有效 JSON', 400)
+  }
+
+  const description = String(payload.description || '').trim()
+  const promptModel = String(payload.promptModel || '').trim()
+  const targetModel = String(payload.targetModel || '').trim()
+  const apiKey = String(payload.apiKey || '').trim()
+  const mode = payload.mode === 'image-to-image' ? 'image-to-image' : 'text-to-image'
+  const ratio = isRatio(payload.ratio) ? payload.ratio : 'auto'
+  const resolution = isResolution(payload.resolution) ? payload.resolution : 'standard'
+  let baseUrl = ''
+
+  try {
+    baseUrl = normalizeBaseUrl(String(payload.baseUrl || '').trim(), env)
+  } catch (error) {
+    return jsonError('invalid_config', error instanceof Error ? error.message : 'API URL 无效', 400)
+  }
+
+  if (!description) return jsonError('bad_request', '请先输入一小段画面描述', 400)
+  if (!promptModel) return jsonError('invalid_config', '请先填写提示词模型', 400)
+  if (!apiKey) return jsonError('invalid_config', 'API Key 不能为空', 400)
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort('timeout'), 90_000)
+
+  try {
+    const upstream = await fetch(buildUpstreamUrl(baseUrl, 'chat/completions'), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      },
+      body: JSON.stringify(createPromptBuilderChatBody({ description, mode, ratio, resolution, targetModel, promptModel })),
+      signal: controller.signal,
+    })
+
+    if (!upstream.ok) return jsonError('upstream_error', await readUpstreamError(upstream), upstream.status)
+    const parsed = await upstream.json() as Record<string, unknown>
+    return json(parsePromptBuilderResponse(parsed, promptModel))
+  } catch (error) {
+    const message = error instanceof Error ? formatFetchError(error.message) : '提示词生成失败'
+    return jsonError('upstream_error', message, 500)
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function createPromptBuilderChatBody(payload: {
+  description: string
+  mode: Mode
+  ratio: AspectRatio
+  resolution: ResolutionTier
+  targetModel: string
+  promptModel: string
+}) {
+  return {
+    model: payload.promptModel,
+    temperature: 0.75,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are a senior AI image prompt designer.',
+          'Expand the user\'s short visual idea into one production-ready image generation prompt.',
+          'Return only the final prompt text, no Markdown, no quotes, no headings, no explanations.',
+          'Use concise natural language with concrete visual details: subject, composition, environment, lighting, style, mood, camera/framing, materials, color palette, and quality cues.',
+          'Avoid mentioning policy, safety, or that you are an AI.',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: [
+          `Short idea: ${payload.description}`,
+          `Generation mode: ${payload.mode === 'image-to-image' ? 'image reference / edit' : 'text to image'}`,
+          `Target image model: ${payload.targetModel || 'unknown'}`,
+          `Aspect ratio: ${payload.ratio}`,
+          `Resolution tier: ${payload.resolution}`,
+          'Write the prompt in the same language as the short idea unless English would clearly improve model comprehension.',
+        ].join('\n'),
+      },
+    ],
+  }
+}
+
+function parsePromptBuilderResponse(parsed: Record<string, unknown>, model: string) {
+  const choices = parsed.choices
+  if (!Array.isArray(choices) || !choices.length) throw new Error('提示词模型没有返回内容')
+  const first = choices[0] as Record<string, unknown>
+  const message = first.message as Record<string, unknown> | undefined
+  const content = typeof message?.content === 'string'
+    ? message.content
+    : typeof first.text === 'string'
+      ? first.text
+      : ''
+  const prompt = content.trim().replace(/^```(?:\w+)?\s*/i, '').replace(/```$/i, '').trim()
+  if (!prompt) throw new Error('提示词模型返回为空')
+  return { ok: true, prompt, model }
+}
 async function handleGenerateStream(request: Request, env: Env, ctx: ExecutionContext) {
   let payload: GeneratePayload
   try {

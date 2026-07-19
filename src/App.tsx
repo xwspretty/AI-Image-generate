@@ -6,7 +6,7 @@ import { ImageUploader } from './components/ImageUploader'
 import { SettingsModal } from './components/SettingsModal'
 import { HistoryPanel } from './components/HistoryPanel'
 import { TaskQueue } from './components/TaskQueue'
-import { createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
+import { buildPromptDirect, buildPromptViaWorker, copyTextToClipboard, createBackgroundTask, createId, fetchBackgroundTaskImage, generateImagesDirect, generateImagesStream, getBackgroundStats, getBackgroundTask, listBackgroundTasks, retryBackgroundTask, uploadImageToPixhost } from './lib/api'
 import { addHistory, clearHistory, deleteHistory, getHistory, updateHistoryImageUrl } from './lib/db'
 import { getAvailableRatios, getImageSize, getResolutionLabel, normalizeRatioForResolution } from './lib/ratios'
 import {
@@ -34,6 +34,9 @@ export default function App() {
   const [identityDraft, setIdentityDraft] = useState(() => loadSettings().identityToken)
   const [mode, setMode] = useState<Mode>('text-to-image')
   const [prompt, setPrompt] = useState('')
+  const [promptDraft, setPromptDraft] = useState('')
+  const [builtPrompt, setBuiltPrompt] = useState('')
+  const [buildingPrompt, setBuildingPrompt] = useState(false)
   const [ratio, setRatio] = useState<AspectRatio>(() => loadSettings().defaultRatio)
   const [resolution, setResolution] = useState<ResolutionTier>(() => loadSettings().defaultResolution)
   const [inputImages, setInputImages] = useState<InputImage[]>([])
@@ -45,6 +48,7 @@ export default function App() {
   const [syncingCloudTasks, setSyncingCloudTasks] = useState(false)
   const uploadCacheRef = useRef(new Map<string, Map<number, UploadResult>>())
   const pollTimersRef = useRef(new Map<string, number>())
+  const messageTimerRef = useRef<number | null>(null)
   const settingsRef = useRef(settings)
 
   useEffect(() => {
@@ -78,6 +82,7 @@ export default function App() {
       window.removeEventListener('focus', handleFocus)
       for (const timer of pollTimersRef.current.values()) window.clearTimeout(timer)
       pollTimersRef.current.clear()
+      if (messageTimerRef.current) window.clearTimeout(messageTimerRef.current)
     }
   }, [])
 
@@ -87,7 +92,13 @@ export default function App() {
   }, [settings.defaultRatio, settings.defaultResolution])
 
   function showMessage(text: string, type: 'ok' | 'error' | 'info' = 'info') {
+    if (messageTimerRef.current) window.clearTimeout(messageTimerRef.current)
     setMessage({ text, type })
+    const delay = type === 'error' ? 7000 : type === 'info' ? 4500 : 3000
+    messageTimerRef.current = window.setTimeout(() => {
+      setMessage(null)
+      messageTimerRef.current = null
+    }, delay)
   }
 
   function patchSettings(patch: Partial<AppSettings>) {
@@ -155,6 +166,7 @@ export default function App() {
       defaultResolution: next.defaultResolution,
       identityToken: normalizeIdentityToken(next.identityToken),
       autoUploadPixhost: next.autoUploadPixhost === true,
+      promptModel: String(next.promptModel || DEFAULT_SETTINGS.promptModel).trim(),
     }
     const identityChanged = normalizeIdentityToken(settingsRef.current.identityToken) !== normalized.identityToken
     if (identityChanged) {
@@ -355,6 +367,61 @@ export default function App() {
     }
   }
 
+  function validateBeforeBuildPrompt() {
+    if (!settings.baseUrl.trim()) return '请先填写 API URL'
+    if (!settings.apiKey.trim()) return '请先填写 API Key'
+    if (!settings.promptModel.trim()) return '请先填写提示词模型'
+    if (!promptDraft.trim() && !prompt.trim()) return '请先输入一小段画面描述'
+    if (settings.requestMode !== 'direct' && !isValidIdentityToken(settings.identityToken)) return `请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`
+    return ''
+  }
+
+  async function handleBuildPrompt() {
+    const invalid = validateBeforeBuildPrompt()
+    if (invalid) {
+      showMessage(invalid, 'error')
+      if (invalid.includes('API') || invalid.includes('模型') || invalid.includes('空间密码')) setSettingsOpen(true)
+      return
+    }
+
+    setBuildingPrompt(true)
+    setBuiltPrompt('')
+    try {
+      const payload = {
+        description: (promptDraft || prompt).trim(),
+        mode,
+        ratio,
+        resolution,
+        targetModel: settings.model.trim(),
+        promptModel: settings.promptModel.trim(),
+        baseUrl: settings.baseUrl.trim(),
+        apiKey: settings.apiKey.trim(),
+      }
+      const response = settings.requestMode === 'direct'
+        ? await buildPromptDirect(payload)
+        : await buildPromptViaWorker(payload, settings.identityToken)
+      setBuiltPrompt(response.prompt)
+      showMessage('提示词已生成，可以复制或填入主提示词', 'ok')
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : '提示词生成失败', 'error')
+    } finally {
+      setBuildingPrompt(false)
+    }
+  }
+
+  async function handleCopyBuiltPrompt() {
+    if (!builtPrompt.trim()) return
+    try {
+      await copyTextToClipboard(builtPrompt)
+      showMessage('提示词已复制', 'ok')
+    } catch (error) {
+      showMessage(error instanceof Error ? error.message : '复制失败', 'error')
+    }
+  }
+  function isVitePreviewHost() {
+    return (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
+      && (window.location.port === '4173' || window.location.port === '5173')
+  }
   function validateBeforeGenerate() {
     if (!isValidIdentityToken(settings.identityToken)) return `请先设置至少 ${IDENTITY_TOKEN_MIN_LENGTH} 位复杂空间密码`
     if (!settings.baseUrl.trim()) return '请先填写 API URL'
@@ -726,10 +793,10 @@ export default function App() {
       <div className="app-shell identity-shell">
         <section className="identity-card">
           <div className="brand identity-brand">
-            <div className="brand-mark">AI</div>
+            <div className="brand-mark">SW</div>
             <div>
-              <h1>AI Image Generate</h1>
-              <p>请输入你自己设置的空间密码后进入工作台</p>
+              <h1>Studio Workspace</h1>
+              <p>凭据仅用于本地派生，绝不明文上传</p>
             </div>
           </div>
           <div className="identity-help">
@@ -772,10 +839,10 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark">AI</div>
+          <div className="brand-mark">SW</div>
           <div>
-            <h1>AI Image Generate</h1>
-            <p>自定义 URL / Key 的私人生图工作台</p>
+            <h1>Studio Workspace</h1>
+            <p>私人生图控制台</p>
           </div>
         </div>
         <div className="top-actions">
@@ -789,7 +856,7 @@ export default function App() {
       {message ? (
         <div className={`toast ${message.type}`}>
           <span>{message.text}</span>
-          <button type="button" onClick={() => setMessage(null)}>×</button>
+          <button type="button" onClick={() => { if (messageTimerRef.current) window.clearTimeout(messageTimerRef.current); messageTimerRef.current = null; setMessage(null) }}>×</button>
         </div>
       ) : null}
 
@@ -798,13 +865,13 @@ export default function App() {
           <section className="panel">
             <label className="label">模式</label>
             <div className="mode-tabs">
-              <button type="button" className={mode === 'text-to-image' ? 'active' : ''} onClick={() => setMode('text-to-image')}>文生图</button>
-              <button type="button" className={mode === 'image-to-image' ? 'active' : ''} onClick={() => setMode('image-to-image')}>图生图</button>
+              <button type="button" className={mode === 'text-to-image' ? 'active' : ''} onClick={() => setMode('text-to-image')}>文本生成 (T2I)</button>
+              <button type="button" className={mode === 'image-to-image' ? 'active' : ''} onClick={() => setMode('image-to-image')}>图像参考 (I2I)</button>
             </div>
           </section>
 
-          <section className="panel">
-            <label className="label" htmlFor="prompt">提示词</label>
+          <section className="panel prompt-panel">
+            <label className="label" htmlFor="prompt">画面描述 Prompt</label>
             <textarea
               id="prompt"
               className="prompt-input"
@@ -812,28 +879,56 @@ export default function App() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
             />
+            <div className="prompt-builder">
+              <label className="field compact" htmlFor="prompt-draft">
+                <span>短描述生成提示词</span>
+                <textarea
+                  id="prompt-draft"
+                  className="prompt-mini-input"
+                  placeholder="例如：赛博城市里的红衣女孩，雨夜，电影感"
+                  value={promptDraft}
+                  onChange={(e) => setPromptDraft(e.target.value)}
+                />
+              </label>
+              <div className="prompt-builder-actions">
+                <button type="button" className="ghost-btn small" disabled={buildingPrompt} onClick={() => void handleBuildPrompt()}>
+                  {buildingPrompt ? '生成中...' : '生成提示词'}
+                </button>
+                <button type="button" className="ghost-btn small" disabled={!builtPrompt.trim()} onClick={() => setPrompt(builtPrompt)}>
+                  填入主提示词
+                </button>
+                <button type="button" className="ghost-btn small" disabled={!builtPrompt.trim()} onClick={() => void handleCopyBuiltPrompt()}>
+                  复制
+                </button>
+              </div>
+              {builtPrompt ? (
+                <textarea
+                  className="built-prompt-output"
+                  value={builtPrompt}
+                  onChange={(e) => setBuiltPrompt(e.target.value)}
+                />
+              ) : null}
+            </div>
           </section>
-
           {mode === 'image-to-image' ? (
             <section className="panel">
-              <label className="label">参考图片</label>
+              <label className="label">参考图像 References</label>
               <ImageUploader images={inputImages} onChange={setInputImages} onError={(text) => showMessage(text, 'error')} />
             </section>
           ) : null}
 
           <section className="panel">
-            <label className="label">模型</label>
-            <input
-              className="text-input"
-              value={settings.model}
-              onChange={(e) => patchSettings({ model: e.target.value })}
-              placeholder="gpt-image-2"
-            />
+            <div className="label-row">
+              <label className="label">生图模型 Engine</label>
+              <button type="button" className="text-link-btn" onClick={() => setSettingsOpen(true)}>设置</button>
+            </div>
+            <div className="readonly-value" title={settings.model || '未设置'}>
+              {settings.model || '未设置'}
+            </div>
           </section>
-
           <section className="panel">
             <div className="label-row">
-              <label className="label">分辨率档位</label>
+              <label className="label">物理分辨率 Resolution</label>
               <span>{getResolutionLabel(resolution)}</span>
             </div>
             <ResolutionPicker
@@ -850,7 +945,7 @@ export default function App() {
 
           <section className="panel">
             <div className="label-row">
-              <label className="label">比例</label>
+              <label className="label">画面比例 Aspect Ratio</label>
               <span>{ratio === 'auto' ? '自动' : ratio}</span>
             </div>
             <RatioPicker
@@ -879,7 +974,7 @@ export default function App() {
           </section>
 
           <button type="button" className="generate-btn" onClick={handleGenerate}>
-            提交任务（{settings.count} 张）
+            发起生成请求（{settings.count} 张）
           </button>
         </aside>
 
