@@ -7,6 +7,7 @@ interface Env {
   IMAGE_WORKFLOW?: Workflow<ImageWorkflowParams>
   ALLOW_HTTP_API?: string
   ALLOW_PRIVATE_HOSTS?: string
+  SITE_ACCESS_PASSWORD?: string
 }
 
 type Mode = 'text-to-image' | 'image-to-image'
@@ -215,6 +216,9 @@ const PIXHOST_MAX_BYTES = 10 * 1024 * 1024
 const PIXHOST_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif'])
 const IDENTITY_TOKEN_MIN_LENGTH = 10
 const DERIVED_OWNER_HASH_RE = /^[a-f0-9]{64}$/i
+const SITE_ACCESS_COOKIE = 'sw_access'
+const SITE_ACCESS_SALT = 'studio-workspace-access:v1:'
+const SITE_ACCESS_MAX_AGE = 60 * 60 * 24 * 30
 
 let schemaReady: Promise<void> | null = null
 
@@ -225,6 +229,13 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS_HEADERS })
     }
+
+    if (url.pathname === '/auth/login') return handleSiteAccessLogin(request, env, url)
+    if (url.pathname === '/auth/logout') return handleSiteAccessLogout(url)
+    if (isPublicAsset(url.pathname)) return env.ASSETS.fetch(request)
+
+    const siteAccess = await requireSiteAccess(request, env, url)
+    if (siteAccess) return siteAccess
 
     if (url.pathname === '/api/health') {
       return json({ ok: true, message: 'Worker is ready', background: Boolean(env.DB && env.IMAGE_WORKFLOW) })
@@ -814,6 +825,150 @@ async function streamGenerate(writer: WritableStreamDefaultWriter<Uint8Array>, d
   }
 }
 
+async function requireSiteAccess(request: Request, env: Env, url: URL) {
+  const expectedHash = await getConfiguredSiteAccessHash(env)
+  if (!expectedHash) return undefined
+
+  const cookieHash = normalizeAccessHash(getCookie(request, SITE_ACCESS_COOKIE))
+  if (cookieHash && timingSafeEqual(cookieHash, expectedHash)) return undefined
+
+  if (url.pathname.startsWith('/api/')) {
+    return jsonError('auth_error', '请先输入站点访问口令', 401)
+  }
+
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response('Unauthorized', { status: 401, headers: { 'Cache-Control': 'no-store' } })
+  }
+
+  return renderSiteAccessPage('', 200)
+}
+
+async function handleSiteAccessLogin(request: Request, env: Env, url: URL) {
+  const expectedHash = await getConfiguredSiteAccessHash(env)
+  if (!expectedHash) return redirectWithCookie('/', '')
+  if (request.method !== 'POST') return renderSiteAccessPage('', 200)
+
+  let password = ''
+  try {
+    const form = await request.formData()
+    password = String(form.get('accessKey') || '').trim()
+  } catch {
+    return renderSiteAccessPage('请求格式无效', 400)
+  }
+
+  if (!password) return renderSiteAccessPage('请输入访问口令', 401)
+  const submittedHash = await hashSiteAccessPassword(password)
+  if (!timingSafeEqual(submittedHash, expectedHash)) {
+    return renderSiteAccessPage('访问口令不正确', 401)
+  }
+
+  return redirectWithCookie('/', createSiteAccessCookie(url, submittedHash, SITE_ACCESS_MAX_AGE))
+}
+
+function handleSiteAccessLogout(url: URL) {
+  return redirectWithCookie('/', createSiteAccessCookie(url, '', 0))
+}
+
+async function getConfiguredSiteAccessHash(env: Env) {
+  const password = String(env.SITE_ACCESS_PASSWORD || '').trim()
+  return password ? hashSiteAccessPassword(password) : ''
+}
+
+async function hashSiteAccessPassword(password: string) {
+  const bytes = new TextEncoder().encode(`${SITE_ACCESS_SALT}${password.trim()}`)
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return bytesToHex(new Uint8Array(digest))
+}
+
+function normalizeAccessHash(value: string | undefined | null) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return DERIVED_OWNER_HASH_RE.test(normalized) ? normalized : ''
+}
+
+function getCookie(request: Request, name: string) {
+  const cookie = request.headers.get('Cookie') || ''
+  return cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`))
+    ?.slice(name.length + 1) || ''
+}
+
+function createSiteAccessCookie(url: URL, value: string, maxAge: number) {
+  const parts = [
+    `${SITE_ACCESS_COOKIE}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${maxAge}`,
+  ]
+  if (url.protocol === 'https:') parts.push('Secure')
+  return parts.join('; ')
+}
+
+function redirectWithCookie(location: string, cookie: string) {
+  const headers = new Headers({ Location: location, 'Cache-Control': 'no-store' })
+  if (cookie) headers.set('Set-Cookie', cookie)
+  return new Response(null, { status: 303, headers })
+}
+
+function isPublicAsset(pathname: string) {
+  return pathname === '/favicon.svg'
+}
+
+function timingSafeEqual(a: string, b: string) {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
+function renderSiteAccessPage(message: string, status: number) {
+  const error = message ? `<div class="message">${escapeHtml(message)}</div>` : ''
+  return new Response(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Studio Workspace</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 18px; background: #f6f6f7; color: #18181b; }
+    main { width: min(360px, 100%); border: 1px solid #e4e4e7; border-radius: 16px; background: white; box-shadow: 0 22px 70px rgba(24,24,27,.08); padding: 28px; }
+    .mark { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: #18181b; color: white; font-weight: 800; margin: 0 auto 14px; }
+    h1 { margin: 0; text-align: center; font-size: 20px; line-height: 1.2; }
+    p { margin: 8px 0 22px; text-align: center; color: #71717a; font-size: 13px; line-height: 1.5; }
+    form { display: flex; flex-direction: column; gap: 12px; }
+    label { display: flex; flex-direction: column; gap: 7px; color: #52525b; font-size: 12px; font-weight: 700; }
+    input { width: 100%; border: 1px solid #d4d4d8; border-radius: 10px; padding: 12px 13px; font: inherit; font-size: 14px; outline: none; }
+    input:focus { border-color: #18181b; box-shadow: 0 0 0 3px rgba(24,24,27,.08); }
+    button { border: 0; border-radius: 10px; padding: 12px 14px; background: #18181b; color: white; font-size: 14px; font-weight: 800; cursor: pointer; }
+    .message { margin-bottom: 12px; border: 1px solid #fecaca; border-radius: 10px; background: #fff7f7; color: #991b1b; padding: 10px 11px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">SW</div>
+    <h1>Studio Workspace</h1>
+    <p>请输入访问口令继续。</p>
+    ${error}
+    <form method="post" action="/auth/login">
+      <label>访问口令<input name="accessKey" type="password" autocomplete="current-password" autofocus /></label>
+      <button type="submit">进入</button>
+    </form>
+  </main>
+</body>
+</html>`, {
+    status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+  })
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char] || char))
+}
 async function requireOwnerHash(request: Request): Promise<{ ownerHash: string; response?: undefined } | { ownerHash?: undefined; response: Response }> {
   const token = normalizeIdentityToken(request.headers.get('X-Identity-Token') || '')
   if (DERIVED_OWNER_HASH_RE.test(token)) {
