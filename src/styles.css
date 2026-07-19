@@ -588,12 +588,12 @@ code { font-size: .85em; color: #3f3f46; }
 .toast.error { border-color: #fecaca; color: #991b1b; }
 .toast button { border: 0; background: transparent; color: inherit; font-size: 18px; }
 
-.modal-mask { position: fixed; inset: 0; z-index: 100; background: rgba(24,24,27,.42); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 18px; }
-.settings-modal { width: min(640px, 100%); max-height: 88vh; display: flex; flex-direction: column; background: white; border-radius: 16px; box-shadow: 0 28px 80px rgba(24,24,27,.22); overflow: hidden; }
+.modal-mask { position: fixed; inset: 0; z-index: 100; background: rgba(24,24,27,.42); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 18px; overscroll-behavior: contain; touch-action: none; }
+.settings-modal { width: min(640px, 100%); max-height: 88vh; display: flex; flex-direction: column; background: white; border-radius: 16px; box-shadow: 0 28px 80px rgba(24,24,27,.22); overflow: hidden; touch-action: auto; }
 .modal-header { display: flex; align-items: start; justify-content: space-between; gap: 18px; padding: 18px 20px 14px; border-bottom: 1px solid #f4f4f5; }
 .modal-header h2 { margin: 0; font-size: 15px; }
 .modal-header p { margin: 4px 0 0; color: #71717a; font-size: 12px; }
-.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px 20px; overflow: auto; }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px 20px; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .field.full, .check-field.full, .settings-note.full { grid-column: 1 / -1; }
 .field small { display: block; margin-top: 6px; color: #a1a1aa; font-size: 11px; line-height: 1.45; }
 .model-field-header {
